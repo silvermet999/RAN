@@ -1,0 +1,18 @@
+- 'time': Elapsed time in milliseconds since the start of the experiment.
+- 'rsrp': Reference Signal Received Power. Measures how strong the signal from the base station is at the UE. More negative = weaker signal. Core indicator of coverage quality.
+- 'cfo': Carrier Frequency Offset (Hz). Frequency difference between the UE's local oscillator and the BS's transmitted carrier frequency. A non-zero value likely reflects emulated channel impairments. A sudden large CFO shift is a strong fake-BS indicator, since a rogue transmitter would have a different oscillator reference.
+- 'dl_mcs_ns': Downlink MCS Number of Samples. Tells you how statistically reliable the MCS average is. Low dl_mcs_ns means few samples, so the MCS value is less trustworthy that interval.
+- 'dl_snr': Downlink Signal-to-Noise Ratio (dB). Measures how much stronger the desired signal is relative to background noise as seen by the UE receiver. Higher = cleaner channel.
+- 'dl_turbo': Downlink Turbo Decoder Iterations. Values close to 1.0 = channel is clean, decoded on first pass. Values climbing toward 2.0+ = channel is degrading, decoder struggling. This is one of the most sensitive early-warning indicators of interference or jamming before the rise in dl_bler.
+- 'dl_brate_ue': Downlink Bitrate at the UE side (bps). Throughput as observed at the UE receiver. 
+- 'dl_bler': Downlink Block Error Rate (%). In normal operation should be near 0%; target in LTE link adaptation is typically ~10% (outer loop power control target). Spikes above 20–30% indicate serious channel problems or active interference.
+- 'ul_mcs_ns': Uplink MCS Number of Samples. Same concept as dl_mcs_ns but for uplink; the number of uplink transport blocks used to compute the reported ul_mcs average.
+- 'ul_buff': Uplink Buffer Size (bytes). Values range from 192k to 194k bytes during active iPerf traffic. Bytes queued at the UE waiting to be transmitted uplink. In normal operation it cycles between filling and draining. Persistent growth = UE can't transmit fast enough (uplink congestion or scheduling starvation). Sudden drop to zero = UE stopped generating traffic or was forced silent.
+- 'ul_brate_ue': Uplink Bitrate at the UE side (bps). The UE's own measurement of how fast it is transmitting uplink data.
+- 'ul_bler': Uplink Block Error Rate (%). Same concept as dl_bler but for the uplink. Fraction of UE transmissions that the BS failed to decode. High ul_bler while dl_bler is normal indicates a UE-specific uplink problem: low power headroom (phr), interference on the UE's allocated PRBs, or a spoofed/rogue UE transmitting on the same RNTI.
+- 'rf_u': RF Underflow counter. Counts the number of underflow events at the RF frontend; moments where the software couldn't supply samples to the radio fast enough, causing a gap in transmission.
+- 'rf_l': RF Loss. Path loss at the radio frontend level. Where rsrp is the received power, rf_l captures the aggregate loss between transmitter and receiver at the hardware RF chain level.
+- 'is_detached': Where ul_ta = 0.0. ul_ta is Uplink Timing Advance: how far in time the UE pre-advances its transmission so it arrives at the BS at the right moment.
+- 'ta_attach_diverge': Where is_attached = 1.0 and ul_ta = 0.0. is_attached is a boolean (0/1); whether the UE is currently attached to the network.
+- 'impossible_state': Where is_attached = 0.0 and ul_ta > 0.0. Higher value in ul_ta = UE is physically farther from the BS.
+- 'ul_ta_tier': The approximate UE distance from BS (ul_ta). Values are 0.52µs, 1.0µs or 2.1µs. 0.52µs means 78m (very close UE), 1.0 µs means 150m (moderate distance) and 2.1 µs means 315m (furthest UEs in the emulated scenario)
