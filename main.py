@@ -1,5 +1,5 @@
 import pandas as pd
-from data_profiling import ProfileReport
+# from data_profiling import ProfileReport
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OrdinalEncoder
 from sklearn.preprocessing import MinMaxScaler

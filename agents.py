@@ -22,7 +22,7 @@ llm = ChatOllama(
     temperature=0.7,
 )
 
-main_instruction = PromptTemplate("""
+main_instruction = PromptTemplate(template="""
     You are an expert in cybersecurity, specifically network intrusion detection. Assist a cybersecurity analyst in identifying network attacks.
     Answer the following questions to determine if there is an attack:
         - "Are there any UEs showing abnormal downlink block error rates right now?"
@@ -49,7 +49,7 @@ main_instruction = PromptTemplate("""
 
 report_prompt = PromptTemplate(
     template="""
-    You are an assistant . According to the analyst agent's answer, follow the incident template attached to report a structured incident report.
+    You are an assistant to the analyst agent. According to the analyst agent's answer, follow the incident template attached to report a structured incident report.
 
     Strict constraints:
         - Follow the report structure provided. Do not use another one.
@@ -74,24 +74,22 @@ class MessageState(TypedDict, total=False):
     user_input: str
     feature_list: str
     report_template: str
-    report: str
 
 
 def agent_node(state: MessageState):
-    user_goal = state["messages"][-2].content
+    user_goal = state["messages"][0].content
     feature_list = state.get("feature_list")
     report_template = state.get("report_template")
-    print("feature_list", feature_list)
 
     analyst_output = main_instruction | llm | (lambda x: x.content)
     report = report_prompt | llm | (lambda x: x.content)
 
     start = time.time()
-    analyst = analyst_output.invoke({"user_goal": user_goal, "feature_list": feature_list})
-    print("construction time:", (time.time() - start) / 60)
+    analyst = analyst_output.invoke({"analyst_goal": user_goal, "feature_list": feature_list})
+    print("analyst: ", (time.time() - start) / 60)
     start = time.time()
     reporter = report.invoke({"main_agent": analyst_output, "report_template": report_template})
-    print("follow_up time:", (time.time() - start) / 60)
+    print("report: ", (time.time() - start) / 60)
 
     state["report"] = reporter
     return {"messages": [AIMessage(content=analyst)], "report": [AIMessage(content=reporter)]}
@@ -102,10 +100,10 @@ def build_agent():
     workflow.add_edge(START, "agent")
     workflow.add_edge("agent", END)
     return workflow.compile(checkpointer=memory)
-# agent = build_proposal_agent()
+# agent = build_agent()
 # async def result():
 #    result_proposal = await agent.ainvoke(
-#                        {"messages": "propose six nodes for flow based analysis"},
+#                        {"messages": "Are there any UEs showing abnormal downlink block error rates right now?"},
 #                        config={"configurable": {"thread_id": "session2"}}
 #                    )
 #    return result_proposal
