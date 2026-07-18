@@ -24,6 +24,13 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="/rome_static_medium/sched1/tr0/exp1/bs1/bs1.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
       </map>
     </option>
   </component>

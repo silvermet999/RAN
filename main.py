@@ -1,5 +1,6 @@
 import os
-
+os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+os.environ['TORCH_USE_CUDA_DSA'] = "1"
 import numpy as np
 import sys
 import argparse
@@ -11,11 +12,15 @@ from utils import utils
 import prep
 from utils.display_results import get_measures, print_measures
 
+# IF CUDA RELATED PROBLEMS
+# sudo rmmod nvidia_uvm
+# sudo modprobe nvidia_uvm
+
 parser = argparse.ArgumentParser()
 # parser.add_argument('dataset', type=str)
 
 # Optimization options
-parser.add_argument('--epochs', '-e', type=int, default=50, help='Number of epochs to train.')
+parser.add_argument('--epochs', '-e', type=int, default=2, help='Number of epochs to train.')
 parser.add_argument('--learning_rate', '-lr', type=float, default=0.01, help='The initial learning rate.')
 parser.add_argument('--batch_size', '-b', type=int, default=128, help='Batch size.')
 parser.add_argument('--oe_batch_size', type=int, default=256, help='Batch size.')
@@ -23,7 +28,7 @@ parser.add_argument('--test_bs', type=int, default=200)
 parser.add_argument('--momentum', type=float, default=0.9, help='Momentum.')
 parser.add_argument('--decay', '-d', type=float, default=0.0005, help='Weight decay (L2 penalty).')
 # WRN Architecture
-parser.add_argument('--layers', default=40, type=int, help='total number of layers')
+parser.add_argument('--layers', default=18, type=int, help='total number of layers')
 parser.add_argument('--widen-factor', default=10, type=int, help='widen factor')
 parser.add_argument('--droprate', default=0.3, type=float, help='dropout probability')
 # DAL hyper parameters
@@ -42,8 +47,7 @@ args = parser.parse_args()
 torch.manual_seed(1)
 np.random.seed(args.seed)
 torch.cuda.manual_seed(1)
-os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
-os.environ['TORCH_USE_CUDA_DSA'] = "1"
+
 cuda = True if torch.cuda.is_available() else False
 
 print(args.gamma, args.beta, args.rho)
@@ -55,9 +59,8 @@ test_dataset = utils.CustomDataset(prep.X_test_sc.to_numpy(), prep.y_test.to_num
 
 train_loader_in, train_loader_out = utils.dataset_function(train_dataset, X = prep.X_train_sc, batch_size_t = args.batch_size, batch_size_o=args.oe_batch_size, train=True)
 test_loader_in, test_loader_out = utils.dataset_function(train_dataset, X = prep.X_test_sc, batch_size_t = args.batch_size, batch_size_o=args.oe_batch_size, train=False)
-
-# ood_num_examples = len(test_data) // 5
-# expected_ap = ood_num_examples / (ood_num_examples + len(test_data))
+ood_num_examples = len(prep.X_test) // 5
+expected_ap = ood_num_examples / (ood_num_examples + len(prep.X_test))
 concat = lambda x: np.concatenate(x, axis=0)
 to_np = lambda x: x.data.cpu().numpy()
 
@@ -66,16 +69,16 @@ def get_ood_scores(loader, in_dist=False):
     net.eval()
     with torch.no_grad():
         for batch_idx, (data, target) in enumerate(loader):
-            if batch_idx >= test_loader_out // args.test_bs and in_dist is False:
+            if batch_idx >= ood_num_examples // args.test_bs and in_dist is False:
                 break
-            data, target = data.cuda(), target.cuda()
+            data, target = data.to(torch.float).cuda(), target.cuda()
             output = net(data)
             smax = to_np(F.softmax(output, dim=1))
             _score.append(-np.max(smax, axis=1))
     if in_dist:
         return concat(_score).copy() # , concat(_right_score).copy(), concat(_wrong_score).copy()
     else:
-        return concat(_score)[:test_loader_out].copy()
+        return concat(_score)[:ood_num_examples].copy()
 
 def get_and_print_results(ood_loader, in_score, num_to_avg=1):
     net.eval()
@@ -100,7 +103,7 @@ def train(epoch, gamma):
     for batch_idx, (in_set, out_set) in enumerate(zip(train_loader_in, train_loader_out)):
 
         data, target = torch.cat((in_set[0], out_set[0]), 0), in_set[1]
-        data, target = data.cuda(), target.cuda()
+        data, target = data.to(torch.float).cuda(), target.cuda()
 
         x, emb = net.pred_emb(data)
         l_ce = F.cross_entropy(x[:len(in_set[0])], target)
@@ -173,7 +176,7 @@ if __name__ == "__main__":
     for epoch in range(args.epochs):
         gamma = train(epoch, gamma)
 
-        if epoch % 10 == 9:
+        if epoch % 2 == 0:
             net.eval()
             in_score = get_ood_scores(test_loader_in, in_dist=True)
             metric_ll = []

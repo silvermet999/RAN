@@ -13,6 +13,10 @@ from typing_extensions import TypedDict
 from langgraph.graph import START, END, StateGraph, add_messages
 from langchain_core.runnables import RunnableSequence
 from langgraph.types import CachePolicy
+import getpass
+import os
+from langchain_anthropic import ChatAnthropic
+from typing_extensions import Annotated
 
 memory = MemorySaver()
 
@@ -21,6 +25,15 @@ llm = ChatOllama(
     base_url="http://localhost:11434",
     temperature=0.7,
 )
+
+
+if "ANTHROPIC_API_KEY" not in os.environ:
+    os.environ["ANTHROPIC_API_KEY"] = getpass.getpass("Enter your Anthropic API key: ")
+
+
+llm_claude = ChatAnthropic(model="claude-haiku-4-5-20251001")
+
+
 
 main_instruction = PromptTemplate(template="""
     You are an expert in cybersecurity, specifically network intrusion detection. Assist a cybersecurity analyst in identifying network attacks.

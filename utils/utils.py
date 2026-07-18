@@ -139,14 +139,15 @@ class CustomDataset(Dataset):
         return sample, label
 
 # Train eval test split of pytorch dataset
-def dataset_function(dataset, batch_size_t, batch_size_o, train=True):
+def dataset_function(dataset, X, batch_size_t, batch_size_o, train=True):
     total_size = len(dataset)
     test_size = total_size // 5
     train_size = total_size - test_size
     train_subset = Subset(dataset, range(train_size))
     test_subset = Subset(dataset, range(train_size, total_size))
-    ood_dataset = SyntheticOODDataset(train_subset, regenerate_fn=make_ood_batch)
-    ood_test_dataset = SyntheticOODDataset(test_subset, regenerate_fn=make_ood_batch)
+    ood_dataset = SyntheticOODDataset(X, regenerate_fn=make_ood_batch)
+    ood_test_dataset = SyntheticOODDataset(X, regenerate_fn=make_ood_batch)
+
     if train:
         train_loader = DataLoader(train_subset, batch_size=batch_size_t, shuffle=True, num_workers=4, pin_memory=False)
         train_loader_ood = DataLoader(ood_dataset, batch_size=batch_size_o, shuffle=True, num_workers=4, pin_memory=False)

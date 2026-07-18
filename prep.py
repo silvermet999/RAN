@@ -186,11 +186,14 @@ X_test_disc = X_test_disc.astype(int)
 enc = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
 X_train_disc[X_train_disc.columns] = enc.fit_transform(X_train_disc[X_train_disc.columns]).astype(int)
 X_test_disc[X_train_disc.columns] = enc.transform(X_test_disc[X_train_disc.columns]).astype(int)
+X_train_disc = X_train_disc.reset_index(drop=True)
+X_test_disc = X_test_disc.reset_index(drop=True)
 
 scaler = MinMaxScaler(feature_range=(-1, 1))
 cont_copy = X_train_cont.copy()
 X_train_cont = scaler.fit_transform(X_train_cont)
 X_test_cont = scaler.transform(X_test_cont)
+
 
 X_train_cont_df = pd.DataFrame(X_train_cont, columns=cont_copy.columns)
 X_test_cont_df = pd.DataFrame(X_test_cont, columns=cont_copy.columns)
