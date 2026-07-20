@@ -47,7 +47,7 @@ main_instruction = PromptTemplate(template="""
         
     Strict constraint: 
         - Analyse the analyst's overall goal before answering the question.
-        - Use ONLY the dataset provided, the feature list is available in the file input along with the description of each feature.
+        - Use ONLY the src provided, the feature list is available in the file input along with the description of each feature.
     __INPUT__
     analyst goal: {analyst_goal}
     feature list: {feature_list}

@@ -39,7 +39,7 @@ def parse_args(args):
 
     # if test: ---train False
     parser.add_argument('--train', action='store_true')
-    # unaug = unaugmented dataset = original dataset : if False then augmented dataset
+    # unaug = unaugmented src = original src : if False then augmented src
     parser.add_argument("--unaug_dataset", action="store_true")
     parser.add_argument("--dataset_file", default="results/ds.csv")
     # PLEASE USE THE ABSOLUTE PATH IF YOU GET A NO FILE IS FOUND!!!

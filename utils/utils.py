@@ -124,7 +124,7 @@ class SyntheticOODDataset(Dataset):
         return self.data[idx], -1
 
 
-# Dataframe to Pytorch dataset
+# Dataframe to Pytorch src
 class CustomDataset(Dataset):
     def __init__(self, data, labels):
         self.data = data
@@ -138,7 +138,7 @@ class CustomDataset(Dataset):
         label = torch.tensor(self.labels[idx], dtype=torch.long)
         return sample, label
 
-# Train eval test split of pytorch dataset
+# Train eval test split of pytorch src
 def dataset_function(dataset, X, batch_size_t, batch_size_o, train=True):
     total_size = len(dataset)
     test_size = total_size // 5
@@ -158,18 +158,14 @@ def dataset_function(dataset, X, batch_size_t, batch_size_o, train=True):
         ood_test_loader = DataLoader(ood_test_dataset, batch_size=batch_size_o, shuffle=False)
         return test_loader, ood_test_loader
 
-# inverse scaling (in benchmark classification)
-def inverse_sc_cont(X, synth):
-    synth_inv = synth * (X.max() - X.min()) + X.min()
-    return pd.DataFrame(synth_inv, columns=X.columns, index=synth.index)
 
-# choose unaugmented or augmented dataset
-# def dataset(original=False, train=True, confidence=True):
+# choose unaugmented or augmented src
+# def src(original=False, train=True, confidence=True):
 #     if original:
 #         if train:
-#             dataset = CustomDataset(prep.X_train_sc.to_numpy(), prep.y_train.to_numpy())
+#             src = CustomDataset(prep.X_train_sc.to_numpy(), prep.y_train.to_numpy())
 #         else:
-#             dataset = CustomDataset(prep.X_test_sc.to_numpy(), prep.y_test.to_numpy())
+#             src = CustomDataset(prep.X_test_sc.to_numpy(), prep.y_test.to_numpy())
 #     else:
 #         args = parse_args(sys.argv[1:])
 #         df_org = pd.concat([prep.X_sc, prep.y], axis=1)
@@ -187,7 +183,7 @@ def inverse_sc_cont(X, synth):
 #
 #         X_train, X_test, y_train, y_test = prep.vertical_split(X, y)
 #         if train:
-#             dataset = CustomDataset(X_train.to_numpy(), labels=y_train.to_numpy())
+#             src = CustomDataset(X_train.to_numpy(), labels=y_train.to_numpy())
 #         else:
-#             dataset = CustomDataset(X_test.to_numpy(), labels=y_test.to_numpy())
-#     return dataset
+#             src = CustomDataset(X_test.to_numpy(), labels=y_test.to_numpy())
+#     return src

@@ -1,6 +1,6 @@
 .venv/
 __pycache__/
-dataset/
+src/
 rome_static_medium/
 report.html
 .env

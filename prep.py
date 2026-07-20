@@ -131,7 +131,7 @@ def concat_csvs():
     return df
 
 
-df = pd.read_csv("dataset/all.csv",index_col=False)
+df = pd.read_csv("src/all.csv", index_col=False)
 
 df = df.drop(["Unnamed: 4", "Unnamed: 10", "Unnamed: 18", "Unnamed: 28", "Unnamed: 31"], axis=1)
 df = df.dropna(axis=0)
