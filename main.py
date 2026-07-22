@@ -1,3 +1,4 @@
+import math
 import os
 
 from sklearn.ensemble import RandomForestClassifier
@@ -28,7 +29,7 @@ parser = argparse.ArgumentParser()
 # parser.add_argument('src', type=str)
 
 # Optimization options
-parser.add_argument('--epochs', '-e', type=int, default=2, help='Number of epochs to train.')
+parser.add_argument('--epochs', '-e', type=int, default=50, help='Number of epochs to train.')
 parser.add_argument('--learning_rate', '-lr', type=float, default=0.01, help='The initial learning rate.')
 parser.add_argument('--batch_size', '-b', type=int, default=128, help='Batch size.')
 parser.add_argument('--oe_batch_size', type=int, default=256, help='Batch size.')
@@ -43,9 +44,9 @@ parser.add_argument('--droprate', default=0.3, type=float, help='dropout probabi
 parser.add_argument('--gamma', default=1, type=float)
 parser.add_argument('--beta',  default=0.5, type=float)
 parser.add_argument('--rho',   default=0.01, type=float)
-parser.add_argument('--strength', default=0.01, type=float)
+parser.add_argument('--strength', default=0.05, type=float) #0.01
 parser.add_argument('--warmup', type=int, default=0)
-parser.add_argument('--iter', default=10, type=int)
+parser.add_argument('--iter', default=20, type=int) #10
 # Others
 parser.add_argument('--out_as_pos', action='store_true', help='OE define OOD data as positive.')
 parser.add_argument('--seed', type=int, default=1)
@@ -93,7 +94,7 @@ def get_and_print_results(ood_loader, in_score, num_to_avg=1):
     aurocs, auprs, fprs = [], [], []
     for _ in range(num_to_avg):
         out_score = get_ood_scores(ood_loader)
-        if args.out_as_pos: # OE's defines out samples as positive
+        if args.out_as_pos:
             measures = get_measures(out_score, in_score)
         else:
             measures = get_measures(-in_score, -out_score)
@@ -102,12 +103,13 @@ def get_and_print_results(ood_loader, in_score, num_to_avg=1):
     print_measures(auroc, aupr, fpr, '')
     return fpr, auroc, aupr
 
+
 def train(epoch, gamma):
-
     net.train()
-
     loss_avg = 0.0
+    ce_avg, oe_avg, oe_old_avg = 0.0, 0.0, 0.0
     train_loader_out.dataset._regenerate()
+
     for batch_idx, (in_set, out_set) in enumerate(zip(train_loader_in, train_loader_out)):
 
         data, target = torch.cat((in_set[0], out_set[0]), 0), in_set[1]
@@ -122,14 +124,12 @@ def train(epoch, gamma):
 
         for _ in range(args.iter):
             emb_bias.requires_grad_()
-
             x_aug = net.fc_out(emb_bias + emb_oe)
             l_sur = - (x_aug.mean(1) - torch.logsumexp(x_aug, dim=1)).mean()
             r_sur = (emb_bias.abs()).mean(-1).mean()
             l_sur = l_sur - r_sur * gamma
             grads = torch.autograd.grad(l_sur, [emb_bias])[0]
             grads /= (grads ** 2).sum(-1).sqrt().unsqueeze(1)
-
             emb_bias = emb_bias.detach() + args.strength * grads.detach()
             optimizer.zero_grad()
 
@@ -143,12 +143,29 @@ def train(epoch, gamma):
         l_oe = - (x_oe.mean(1) - torch.logsumexp(x_oe, dim=1)).mean()
         loss = l_ce + .5 * l_oe
 
+        # ---- DEBUG BLOCK ----
+        # if batch_idx % 20 == 0:
+        #     print(f"\n[batch {batch_idx}] l_ce={l_ce.item():.4f}  l_oe={l_oe.item():.4f}  "
+        #           f"l_oe_old={l_oe_old.item():.4f}  gamma={gamma.item():.4f}  r_sur={r_sur.item():.6f}")
+        #     print(f"  x[:ID] logit range: [{x[:len(in_set[0])].min().item():.2f}, {x[:len(in_set[0])].max().item():.2f}]")
+        #     print(f"  x[OOD] logit range: [{x[len(in_set[0]):].min().item():.2f}, {x[len(in_set[0]):].max().item():.2f}]")
+        #     print(f"  emb norm: {emb.norm(dim=-1).mean().item():.4f}  emb_bias norm: {emb_bias.norm(dim=-1).mean().item():.4f}")
+        #     if torch.isnan(loss) or torch.isinf(loss):
+        #         print("  !!! NaN/Inf detected in loss !!!")
+        # ---- END DEBUG ----
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
         loss_avg = loss_avg * 0.8 + float(loss) * 0.2
-        sys.stdout.write('\r epoch %2d %d/%d loss %.2f' % (epoch, batch_idx + 1, len(train_loader_in), loss_avg))
+        ce_avg = ce_avg * 0.8 + float(l_ce) * 0.2
+        oe_avg = oe_avg * 0.8 + float(l_oe) * 0.2
+
+        sys.stdout.write('\r epoch %2d %d/%d loss %.2f (ce %.2f, oe %.2f)' %
+                          (epoch, batch_idx + 1, len(train_loader_in), loss_avg, ce_avg, oe_avg))
+        print(f"r_sur={r_sur.item():.4f}  rho={args.rho:.4f}  gamma={gamma.item():.4f}")
+        print(f"l_oe={l_oe.item():.4f}  floor={math.log(3):.4f}  diff={l_oe.item() - math.log(3):.4f}")
         scheduler.step()
 
     return gamma
@@ -179,6 +196,20 @@ scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda step: 
 # else:
 #     pass
 def plots():
+    in_batch, _ = next(iter(train_loader_in))
+    out_batch, _ = next(iter(train_loader_out))
+
+    in_batch = in_batch.numpy()
+    out_batch = out_batch.numpy()
+
+    print("ID shape:", in_batch.shape, " OOD shape:", out_batch.shape)
+
+    X = np.vstack([in_batch, out_batch])
+    y = np.concatenate([np.zeros(len(in_batch)), np.ones(len(out_batch))])
+
+    clf = RandomForestClassifier(n_estimators=200, max_depth=6)
+    scores = cross_val_score(clf, X, y, cv=3, scoring='roc_auc')
+    print(f"ID vs OOD separability (AUROC): {scores.mean():.3f}")
     combined = np.vstack([in_batch, out_batch])
     pca = PCA(n_components=2)
     proj = pca.fit_transform(combined)
@@ -216,29 +247,27 @@ def plots():
 if __name__ == "__main__":
     gamma = 0.01
 
-    in_batch, _ = next(iter(train_loader_in))
-    out_batch, _ = next(iter(train_loader_out))
-
-    in_batch = in_batch.numpy()
-    out_batch = out_batch.numpy()
-
-    print("ID shape:", in_batch.shape, " OOD shape:", out_batch.shape)
-
-
-    # X = np.vstack([in_batch, out_batch])
-    # y = np.concatenate([np.zeros(len(in_batch)), np.ones(len(out_batch))])
-    #
-    # clf = RandomForestClassifier(n_estimators=200, max_depth=6)
-    # scores = cross_val_score(clf, X, y, cv=3, scoring='roc_auc')
-    # print(f"ID vs OOD separability (AUROC): {scores.mean():.3f}")
     for epoch in range(args.epochs):
         gamma = train(epoch, gamma)
 
-        if epoch % 2 == 0:
+        if epoch % 10 == 9:
             net.eval()
             in_score = get_ood_scores(test_loader_in, in_dist=True)
             metric_ll = []
             metric_ll.append(get_and_print_results(test_loader_out, in_score))
             print('\n & %.2f & %.2f & %.2f' % tuple((100 * torch.Tensor(metric_ll).mean(0)).tolist()))
+            torch.save(net.state_dict(), "wr.pt")
 
+# wr no noise
+# [batch 780] l_ce=0.7222  l_oe=1.2052  l_oe_old=1.1733  gamma=1.0000  r_sur=0.014849
+#   x[:ID] logit range: [-3.42, 3.56]
+#   x[OOD] logit range: [-1.98, 2.42]
+#   emb norm: 3.4489  emb_bias norm: 0.2084
+#  epoch 49 798/1916 loss 1.27 (ce 0.67, oe 1.20)& 32.97 & 88.05 & 93.05
+#
+#  & 32.97 & 88.05 & 93.05
 
+# to do
+# improve ce loss => lr (cosine annealing)
+# check ood_score
+# mlflow

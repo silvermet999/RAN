@@ -1,6 +1,6 @@
 .venv/
 __pycache__/
-src/
+src/all.csv
 rome_static_medium/
 report.html
 .env

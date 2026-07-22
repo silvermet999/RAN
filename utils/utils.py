@@ -25,41 +25,6 @@ def parse_args(args):
     return parser.parse_args(args)
 
 
-# When running the decoder
-def types_append(decoder, discrete_out, continuous_out, binary_out, discrete_samples, continuous_samples, binary_samples):
-    for feature in decoder.discrete_features:
-        discrete_samples[feature].append(torch.argmax(torch.round(discrete_out[feature]), dim=-1))
-
-    for feature in decoder.continuous_features:
-        continuous_samples[feature].append(continuous_out[feature])
-
-    for feature in decoder.binary_features:
-        binary_samples[feature].append(torch.argmax(torch.round(binary_out[feature]), dim=-1))
-    return discrete_samples, continuous_samples, binary_samples
-
-def type_concat(decoder, discrete_samples, continuous_samples, binary_samples):
-    for feature in decoder.discrete_features:
-        discrete_samples[feature] = torch.cat(discrete_samples[feature], dim=0)
-
-    for feature in decoder.continuous_features:
-        continuous_samples[feature] = torch.cat(continuous_samples[feature], dim=0)
-
-    for feature in decoder.binary_features:
-        binary_samples[feature] = torch.cat(binary_samples[feature], dim=0)
-
-    return discrete_samples, continuous_samples, binary_samples
-
-def all_samples(discrete_samples, continuous_samples, binary_samples):
-    discrete_tensors = list(discrete_samples.values())
-    continuous_tensors = list(continuous_samples.values())
-    binary_tensors = list(binary_samples.values())
-
-    all_tensors = discrete_tensors + continuous_tensors + binary_tensors
-    all_tensors = [t.unsqueeze(-1) if t.dim() == 1 else t for t in all_tensors]
-    combined = torch.cat(all_tensors, dim=1)
-    return combined
-
-
 # OOD
 def shuffle_marginals(df, random_state=None):
     rng = np.random.default_rng(random_state)
