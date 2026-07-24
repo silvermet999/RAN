@@ -4,3 +4,4 @@ src/all.csv
 rome_static_medium/
 report.html
 .env
+mlflow.db

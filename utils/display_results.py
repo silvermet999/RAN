@@ -1,5 +1,6 @@
 import numpy as np
 import sklearn.metrics as sk
+from sklearn.metrics import confusion_matrix
 
 recall_level_default = 0.95
 
