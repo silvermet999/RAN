@@ -3,7 +3,7 @@ from pathlib import Path
 import re
 # from data_profiling import ProfileReport
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OrdinalEncoder
+from sklearn.preprocessing import OrdinalEncoder, StandardScaler
 from sklearn.preprocessing import MinMaxScaler
 
 
@@ -167,37 +167,83 @@ df['ul_ta_tier'] = df['ul_ta'].map({0.52: 1, 1.0: 2, 2.1: 3}).fillna(0).astype(i
 df = df.drop(["pci", "is_attached", "ul_ta", "pl", "earfcn"], axis=1)
 X = df.drop("attack", axis=1)
 y = df["attack"]
+
 # cat: earfcn rf_u is_attached rsrp dl_mac_ns dl_snr dl_turbo dl_bler ul_buff ul_bler rf_l
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=0)
-X_train_cont = X_train.drop(["rf_u", "rsrp", "dl_mcs_ns", "dl_snr", "dl_turbo", "dl_bler", "ul_ta_tier"
-                        , "ul_buff" ,"ul_bler" ,"rf_l", "is_detached", "ta_attach_diverge", "impossible_state"], axis=1)
 
-X_test_cont = X_test.drop(["rf_u", "rsrp", "dl_mcs_ns", "dl_snr", "dl_turbo", "dl_bler", "ul_ta_tier"
-                        , "ul_buff" ,"ul_bler" ,"rf_l", "is_detached", "ta_attach_diverge", "impossible_state"], axis=1)
+def data_scale(X, enc=None, fit = None, ohe_columns=None):
+    low_card = X[["rf_u", "dl_turbo", "ul_ta_tier"]]
+    ohe = pd.get_dummies(low_card, columns=low_card.columns).astype(int)
+    ohe = ohe.reset_index(drop=True)
+    if ohe_columns is not None:
+        ohe = ohe.reindex(columns=ohe_columns, fill_value=0)
+    else:
+        ohe_columns = ohe.columns.tolist()
 
-X_train_disc = X_train[["rf_u", "rsrp", "dl_mcs_ns", "dl_snr", "dl_turbo", "dl_bler", "ul_ta_tier"
-                        , "ul_buff" ,"ul_bler" ,"rf_l", "is_detached", "ta_attach_diverge", "impossible_state"]]
+    bin = X[["is_detached", "ta_attach_diverge", "impossible_state"]]
+    bin = bin.reset_index(drop=True)
 
-X_test_disc = X_test[["rf_u", "rsrp", "dl_mcs_ns", "dl_snr", "dl_turbo", "dl_bler", "ul_ta_tier"
-                        , "ul_buff" ,"ul_bler" ,"rf_l", "is_detached", "ta_attach_diverge", "impossible_state"]]
-X_train_disc = X_train_disc.astype(int)
-X_test_disc = X_test_disc.astype(int)
+    rest = X[[col for col in X.columns if col not in bin.columns and col not in low_card.columns]]
+    if enc is None:
+        enc = StandardScaler()
+    if fit:
+        scaled = enc.fit_transform(rest)
+    else:
+        scaled = enc.transform(rest)
+    scaled = pd.DataFrame(scaled, columns=rest.columns)
+    scaled = scaled.reset_index(drop=True)
+    X_scaled = pd.concat([ohe, bin, scaled], axis=1)
 
-enc = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
-X_train_disc[X_train_disc.columns] = enc.fit_transform(X_train_disc[X_train_disc.columns]).astype(int)
-X_test_disc[X_train_disc.columns] = enc.transform(X_test_disc[X_train_disc.columns]).astype(int)
-X_train_disc = X_train_disc.reset_index(drop=True)
-X_test_disc = X_test_disc.reset_index(drop=True)
+    return X_scaled, enc, ohe_columns
 
-scaler = MinMaxScaler(feature_range=(-1, 1))
-cont_copy = X_train_cont.copy()
-X_train_cont = scaler.fit_transform(X_train_cont)
-X_test_cont = scaler.transform(X_test_cont)
+X_train_sc, scaler, ohe_columns = data_scale(X_train, enc=None, fit=True)
+X_test_sc, _, _  = data_scale(X_test, enc=scaler, fit=False, ohe_columns=ohe_columns)
+assert X_train_sc.shape[1] == X_test_sc.shape[1], "column mismatch!"
+assert list(X_train_sc.columns) == list(X_test_sc.columns), "column order mismatch!"
+# train_cols = set(X_train_sc.columns)
+# test_cols = set(X_test_sc.columns)
+#
+# print("In train but not test:", train_cols - test_cols)
+# print("In test but not train:", test_cols - train_cols)
 
 
-X_train_cont_df = pd.DataFrame(X_train_cont, columns=cont_copy.columns)
-X_test_cont_df = pd.DataFrame(X_test_cont, columns=cont_copy.columns)
 
-X_train_sc = pd.concat([X_train_disc, X_train_cont_df], axis=1)
-X_test_sc = pd.concat([X_test_disc, X_test_cont_df], axis=1)
+
+
+
+
+
+
+# X_train_cont = X_train.drop(["rf_u", "rsrp", "dl_mcs_ns", "dl_snr", "dl_turbo", "dl_bler", "ul_ta_tier"
+#                         , "ul_buff" ,"ul_bler" ,"rf_l", "is_detached", "ta_attach_diverge", "impossible_state"], axis=1)
+#
+# X_test_cont = X_test.drop(["rf_u", "rsrp", "dl_mcs_ns", "dl_snr", "dl_turbo", "dl_bler", "ul_ta_tier"
+#                         , "ul_buff" ,"ul_bler" ,"rf_l", "is_detached", "ta_attach_diverge", "impossible_state"], axis=1)
+#
+# X_train_disc = X_train[["rf_u", "rsrp", "dl_mcs_ns", "dl_snr", "dl_turbo", "dl_bler", "ul_ta_tier"
+#                         , "ul_buff" ,"ul_bler" ,"rf_l", "is_detached", "ta_attach_diverge", "impossible_state"]]
+#
+# X_test_disc = X_test[["rf_u", "rsrp", "dl_mcs_ns", "dl_snr", "dl_turbo", "dl_bler", "ul_ta_tier"
+#                         , "ul_buff" ,"ul_bler" ,"rf_l", "is_detached", "ta_attach_diverge", "impossible_state"]]
+# X_train_disc = X_train_disc.astype(int)
+# X_test_disc = X_test_disc.astype(int)
+
+# enc = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
+# X_train_disc[X_train_disc.columns] = enc.fit_transform(X_train_disc[X_train_disc.columns]).astype(int)
+# X_test_disc[X_train_disc.columns] = enc.transform(X_test_disc[X_train_disc.columns]).astype(int)
+# X_train_disc = X_train_disc.reset_index(drop=True)
+# X_test_disc = X_test_disc.reset_index(drop=True)
+
+
+# scaler = MinMaxScaler(feature_range=(-1, 1))
+# cont_copy = X_train_cont.copy()
+# X_train_cont = scaler.fit_transform(X_train_cont)
+# X_test_cont = scaler.transform(X_test_cont)
+#
+#
+# X_train_cont_df = pd.DataFrame(X_train_cont, columns=cont_copy.columns)
+# X_test_cont_df = pd.DataFrame(X_test_cont, columns=cont_copy.columns)
+#
+# X_train_sc = pd.concat([X_train_disc, X_train_cont_df], axis=1)
+# X_test_sc = pd.concat([X_test_disc, X_test_cont_df], axis=1)
 

@@ -31,7 +31,7 @@ parser = argparse.ArgumentParser()
 # parser.add_argument('src', type=str)
 
 # Optimization options
-parser.add_argument('--epochs', '-e', type=int, default=50, help='Number of epochs to train.')
+parser.add_argument('--epochs', '-e', type=int, default=100, help='Number of epochs to train.')
 parser.add_argument('--learning_rate', '-lr', type=float, default=0.01, help='The initial learning rate.')
 parser.add_argument('--batch_size', '-b', type=int, default=128, help='Batch size.')
 parser.add_argument('--oe_batch_size', type=int, default=256, help='Batch size.')
@@ -39,7 +39,7 @@ parser.add_argument('--test_bs', type=int, default=200)
 parser.add_argument('--momentum', type=float, default=0.9, help='Momentum.')
 parser.add_argument('--decay', '-d', type=float, default=0.0005, help='Weight decay (L2 penalty).')
 # WRN Architecture
-parser.add_argument('--layers', default=13, type=int, help='total number of layers')
+parser.add_argument('--layers', default=146, type=int, help='total number of layers')
 parser.add_argument('--widen-factor', default=10, type=int, help='widen factor')
 parser.add_argument('--droprate', default=0.3, type=float, help='dropout probability')
 # DAL hyper parameters
@@ -65,13 +65,13 @@ print(args.gamma, args.beta, args.rho)
 
 cudnn.benchmark = True  # fire on all cylinders
 
-train_dataset = utils.CustomDataset(prep.X_train_disc.to_numpy(), prep.y_train.to_numpy())
-test_dataset = utils.CustomDataset(prep.X_test_disc.to_numpy(), prep.y_test.to_numpy())
+train_dataset = utils.CustomDataset(prep.X_train_sc.to_numpy(), prep.y_train.to_numpy())
+test_dataset = utils.CustomDataset(prep.X_test_sc.to_numpy(), prep.y_test.to_numpy())
 
-train_loader_in, train_loader_out = utils.dataset_function(train_dataset, X = prep.X_train_disc, batch_size_t = args.batch_size, batch_size_o=args.oe_batch_size, train=True)
-test_loader_in, test_loader_out = utils.dataset_function(train_dataset, X = prep.X_test_disc, batch_size_t = args.batch_size, batch_size_o=args.oe_batch_size, train=False)
-ood_num_examples = len(prep.X_test) // 5
-expected_ap = ood_num_examples / (ood_num_examples + len(prep.X_test))
+train_loader_in, train_loader_out = utils.dataset_function(train_dataset, X = prep.X_train_sc, batch_size_t = args.batch_size, batch_size_o=args.oe_batch_size, train=True)
+test_loader_in, test_loader_out = utils.dataset_function(train_dataset, X = prep.X_test_sc, batch_size_t = args.batch_size, batch_size_o=args.oe_batch_size, train=False)
+ood_num_examples = len(prep.X_test_sc) // 5
+expected_ap = ood_num_examples / (ood_num_examples + len(prep.X_test_sc))
 concat = lambda x: np.concatenate(x, axis=0)
 to_np = lambda x: x.data.cpu().numpy()
 
@@ -142,9 +142,12 @@ def make_backward_hook(name):
                 print(f"!!! NaN gradient at {name} !!!")
     return hook
 
+def pre_hook(module, input):
+    print(f"Input to {module.__class__.__name__}: shape={input[0].shape}, "
+          f"range=[{input[0].min().item():.3f}, {input[0].max().item():.3f}]")
 
 
-def train(epoch, gamma):
+def train(epoch, gamma, debug_hooks=None):
     net.train()
     loss_avg = 0.0
     ce_avg, oe_avg, oe_old_avg = 0.0, 0.0, 0.0
@@ -198,6 +201,8 @@ def train(epoch, gamma):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        # if batch_idx % 20 == 0 and debug_hooks:
+        #     print(debug_stats)
 
         loss_avg = loss_avg * 0.8 + float(loss) * 0.2
         ce_avg = ce_avg * 0.8 + float(l_ce) * 0.2
@@ -205,7 +210,8 @@ def train(epoch, gamma):
 
         sys.stdout.write('\r epoch %2d %d/%d loss %.2f (ce %.2f, oe %.2f)' %
                           (epoch, batch_idx + 1, len(train_loader_in), loss_avg, ce_avg, oe_avg))
-        # print(f"r_sur={r_sur.item():.4f}  rho={args.rho:.4f}  gamma={gamma.item():.4f}")
+        print(f"emb norm: {emb.norm(dim=-1).mean().item():.4f}")
+        print(f"r_sur: {r_sur.item():.6f}  rho: {args.rho:.4f}  gamma: {gamma.item():.4f}")
         # print(f"l_oe={l_oe.item():.4f}  floor={math.log(3):.4f}  diff={l_oe.item() - math.log(3):.4f}")
         scheduler.step()
 
@@ -228,10 +234,19 @@ num_classes = 3
 net = WideResNet(args.layers, num_classes, args.widen_factor, dropRate=args.droprate).cuda()
 
 handles = []
-handles.append(net.block1.register_forward_hook(make_forward_hook('block1')))
-handles.append(net.block2.register_forward_hook(make_forward_hook('block2')))
-handles.append(net.block1.register_full_backward_hook(make_backward_hook('block1')))
-handles.append(net.block2.register_full_backward_hook(make_backward_hook('block2')))
+for h in handles:
+    h.remove()
+# handles.append(net.block1.register_forward_hook(make_forward_hook('block1')))
+# handles.append(net.block2.register_forward_hook(make_forward_hook('block2')))
+# handles.append(net.block3.register_forward_hook(make_forward_hook('block3')))
+# handles.append(net.block1.register_forward_pre_hook(pre_hook))
+# handles.append(net.block2.register_forward_pre_hook(pre_hook))
+# handles.append(net.block3.register_forward_pre_hook(pre_hook))
+# handles.append(net.block1.register_full_backward_hook(make_backward_hook('block1')))
+# handles.append(net.block2.register_full_backward_hook(make_backward_hook('block2')))
+# handles.append(net.block3.register_full_backward_hook(make_backward_hook('block3')))
+
+
 
 optimizer = torch.optim.SGD(net.parameters(), args.learning_rate, momentum=args.momentum, weight_decay=args.decay, nesterov=True)
 def cosine_annealing(step, total_steps, lr_max, lr_min):
@@ -243,8 +258,7 @@ scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda step: 
 # else:
 #     pass
 
-# for h in handles:
-#     h.remove()
+
 def plots():
     in_batch, _ = next(iter(train_loader_in))
     out_batch, _ = next(iter(train_loader_out))
@@ -296,61 +310,43 @@ def plots():
 
 
 
-# if __name__ == "__main__":
-#     # process = subprocess.Popen(["mlflow", "server", "--host", "127.0.0.1", "--port", "8080"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-#     # mlflow.set_tracking_uri(uri="http://127.0.0.1:8080")
-#
-#     gamma = 0.01
-#
-#     # mlflow.set_experiment("OOD")
-#     mlflow.pytorch.autolog()
-#
-#     with mlflow.start_run():
-#         mlflow.log_params({"epcohs": args.epochs, "learning_rate": args.learning_rate, "batch_size": args.batch_size,
-#                            "oe_batch": args.oe_batch_size})
-#
-#         for epoch in range(args.epochs):
-#             gamma, loss_avg, ce_avg, oe_avg = train(epoch, gamma)
-#
-#             if epoch % 10 == 9:
-#                 net.eval()
-#                 in_score = get_ood_scores(test_loader_in, in_dist=True)
-#                 metric_ll = []
-#                 metric_ll.append(get_and_print_results(test_loader_out, in_score))
-#                 cm = confusion_m(test_loader_out, in_score)
-#                 print('\n & %.2f & %.2f & %.2f' % tuple((100 * torch.Tensor(metric_ll).mean(0)).tolist()))
-#                 print(cm)
-#                 # torch.save(net.state_dict(), "wr.pt")
-#             #     mlflow.log_metric("in_score", in_score, step=epoch)
-#             # mlflow.log_metric("gamma", gamma, step=epoch)
-#             # mlflow.log_metric("loss_avg", loss_avg, step=epoch)
-#             # mlflow.log_metric("ce_avg", ce_avg, step=epoch)
-#             # mlflow.log_metric('oe_avg', oe_avg, step=epoch)
-#             #
-#
-#             mlflow.log_metrics({"gamma": gamma, "loss_avg": loss_avg, "ce_avg": ce_avg, 'oe_avg': oe_avg}, step=epoch)
-#
-#     mlflow.pytorch.log_model(net, name="model", serialization_format="pickle")
+if __name__ == "__main__":
+    # process = subprocess.Popen(["mlflow", "server", "--host", "127.0.0.1", "--port", "8080"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    # mlflow.set_tracking_uri(uri="http://127.0.0.1:8080")
+        gamma = 0.01
 
-# wr no noise
-# [batch 780] l_ce=0.7222  l_oe=1.2052  l_oe_old=1.1733  gamma=1.0000  r_sur=0.014849
-#   x[:ID] logit range: [-3.42, 3.56]
-#   x[OOD] logit range: [-1.98, 2.42]
-#   emb norm: 3.4489  emb_bias norm: 0.2084
-#  epoch 49 798/1916 loss 1.27 (ce 0.67, oe 1.20)& 32.97 & 88.05 & 93.05
-#
-#  & 32.97 & 88.05 & 93.05
+    # mlflow.set_experiment("OOD")
+    # mlflow.pytorch.autolog()
+    #
+    # with mlflow.start_run():
+    #     mlflow.log_params({"epcohs": args.epochs, "learning_rate": args.learning_rate, "batch_size": args.batch_size,
+    #                        "oe_batch": args.oe_batch_size})
 
-# wr
-# [batch 1180] l_ce=0.6716  l_oe=1.1824  l_oe_old=1.1551  gamma=0.9983  r_sur=0.010807
-#   x[:ID] logit range: [-3.42, 4.33]
-#   x[OOD] logit range: [-2.14, 2.45]
-#   emb norm: 2.9244  emb_bias norm: 0.1380
-#  epoch 49 1197/1916 loss 1.21 (ce 0.63, oe 1.17)& 33.90 & 86.21 & 91.84
-#
-#  & 33.90 & 86.21 & 91.84
+        for epoch in range(args.epochs):
+            gamma, loss_avg, ce_avg, oe_avg = train(epoch, gamma, debug_hooks=True)
 
+            if epoch % 10 == 9:
+                net.eval()
+                in_score = get_ood_scores(test_loader_in, in_dist=True)
+                metric_ll = []
+                metric_ll.append(get_and_print_results(test_loader_out, in_score))
+                cm = confusion_m(test_loader_out, in_score)
+                print('\n & %.2f & %.2f & %.2f' % tuple((100 * torch.Tensor(metric_ll).mean(0)).tolist()))
+                print(cm)
+                # torch.save(net.state_dict(), "wr.pt")
+            #     mlflow.log_metric("in_score", in_score, step=epoch)
+            # mlflow.log_metric("gamma", gamma, step=epoch)
+            # mlflow.log_metric("loss_avg", loss_avg, step=epoch)
+            # mlflow.log_metric("ce_avg", ce_avg, step=epoch)
+            # mlflow.log_metric('oe_avg', oe_avg, step=epoch)
+            #
+
+    #         mlflow.log_metrics({"gamma": gamma, "loss_avg": loss_avg, "ce_avg": ce_avg, 'oe_avg': oe_avg}, step=epoch)
+    #
+    # mlflow.pytorch.log_model(net, name="model", serialization_format="pickle")
 
 
 # to do
-# improve ce loss => lr (cosine annealing)
+# re check oe loss, it is included but not moving
+#  epoch  0 91/1916 loss 1.66 (ce 1.08, oe 1.15)emb norm: 13.8760
+# r_sur: 0.016145  rho: 0.0100  gamma: 0.7270
