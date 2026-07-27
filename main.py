@@ -210,8 +210,8 @@ def train(epoch, gamma, debug_hooks=None):
 
         sys.stdout.write('\r epoch %2d %d/%d loss %.2f (ce %.2f, oe %.2f)' %
                           (epoch, batch_idx + 1, len(train_loader_in), loss_avg, ce_avg, oe_avg))
-        print(f"emb norm: {emb.norm(dim=-1).mean().item():.4f}")
-        print(f"r_sur: {r_sur.item():.6f}  rho: {args.rho:.4f}  gamma: {gamma.item():.4f}")
+        # print(f"emb norm: {emb.norm(dim=-1).mean().item():.4f}")
+        # print(f"r_sur: {r_sur.item():.6f}  rho: {args.rho:.4f}  gamma: {gamma.item():.4f}")
         # print(f"l_oe={l_oe.item():.4f}  floor={math.log(3):.4f}  diff={l_oe.item() - math.log(3):.4f}")
         scheduler.step()
 

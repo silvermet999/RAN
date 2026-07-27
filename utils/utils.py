@@ -10,20 +10,6 @@ import prep
 
 cuda = True if torch.cuda.is_available() else False
 
-def parse_args(args):
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--train', action='store_true')
-    parser.add_argument('--X_ds', default="results/rl_ds1.csv")
-    parser.add_argument('--y_ds', default="results/labels.csv")
-    parser.add_argument("--dataset_file", default="results/ds.csv")
-    parser.add_argument("--n_inter", default=5, type=int) # we set it to 4 when --unaug_dataset = False
-    parser.add_argument("--n_samples_per_inter", default=27321, type=int) # we set it to 43313 when --unaug_dataset = False
-
-    parser.add_argument("--model", choices=['RL-GAN', 'AE+DQN'])
-    parser.add_argument("--save_state_dict", default="results/ae1.pth")
-
-    return parser.parse_args(args)
-
 
 # OOD
 def shuffle_marginals(df, random_state=None):
@@ -110,45 +96,15 @@ def dataset_function(dataset, X, batch_size_t, batch_size_o, train=True):
     train_size = total_size - test_size
     train_subset = Subset(dataset, range(train_size))
     test_subset = Subset(dataset, range(train_size, total_size))
-    ood_dataset = SyntheticOODDataset(X, regenerate_fn=make_ood_batch)
-    ood_test_dataset = SyntheticOODDataset(X, regenerate_fn=make_ood_batch)
+    #ood_dataset = SyntheticOODDataset(X, regenerate_fn=make_ood_batch)
+    #ood_test_dataset = SyntheticOODDataset(X, regenerate_fn=make_ood_batch)
 
     if train:
         train_loader = DataLoader(train_subset, batch_size=batch_size_t, shuffle=True, num_workers=4, pin_memory=False)
-        train_loader_ood = DataLoader(ood_dataset, batch_size=batch_size_o, shuffle=True, num_workers=4, pin_memory=False)
-        return train_loader, train_loader_ood
+        #train_loader_ood = DataLoader(ood_dataset, batch_size=batch_size_o, shuffle=True, num_workers=4, pin_memory=False)
+        return train_loader #, train_loader_ood
 
     else:
         test_loader = DataLoader(test_subset, batch_size=batch_size_t, shuffle=True, num_workers=4, pin_memory=False)
-        ood_test_loader = DataLoader(ood_test_dataset, batch_size=batch_size_o, shuffle=False)
-        return test_loader, ood_test_loader
-
-
-# choose unaugmented or augmented src
-# def src(original=False, train=True, confidence=True):
-#     if original:
-#         if train:
-#             src = CustomDataset(prep.X_train_sc.to_numpy(), prep.y_train.to_numpy())
-#         else:
-#             src = CustomDataset(prep.X_test_sc.to_numpy(), prep.y_test.to_numpy())
-#     else:
-#         args = parse_args(sys.argv[1:])
-#         df_org = pd.concat([prep.X_sc, prep.y], axis=1)
-#         X_rl = pd.DataFrame(pd.read_csv(f"{args.X_ds}"))
-#         X_rl = X_rl.apply(lambda col: col.str.strip("[]").astype(float) if col.dtype == "object" else col)
-#         y_rl = pd.DataFrame(pd.read_csv(f"{args.y_ds}"))
-#         df_rl = pd.concat([X_rl, y_rl], axis=1)
-#         df_rl = df_rl[df_rl["attack_cat"] != 2]
-#         if confidence:
-#             df_rl = df_rl[df_rl["confidence"] > 0.89]
-#             df_rl = df_rl.drop("confidence", axis=1)
-#         df = pd.concat([df_org, df_rl], axis=0)
-#         X = df.drop(["attack_cat"], axis=1)
-#         y = df["attack_cat"]
-#
-#         X_train, X_test, y_train, y_test = prep.vertical_split(X, y)
-#         if train:
-#             src = CustomDataset(X_train.to_numpy(), labels=y_train.to_numpy())
-#         else:
-#             src = CustomDataset(X_test.to_numpy(), labels=y_test.to_numpy())
-#     return src
+        #ood_test_loader = DataLoader(ood_test_dataset, batch_size=batch_size_o, shuffle=False)
+        return test_loader #, ood_test_loader

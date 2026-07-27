@@ -90,11 +90,17 @@ class WideResNet(nn.Module):
         return self.fc_out(out)
 
     def pred_emb(self, x):
+        #print("input", x.mean(), x.std())
         out = self.fc_in(x)
+        #print("first", out.mean(), out.std())
         out = self.block1(out)
+        #print("second", out.mean(), out.std())
         out = self.block2(out)
+        #print("third", out.mean(), out.std())
         out = self.block3(out)
+        #print("fourth", out.mean(), out.std())
         emb = self.relu(self.bn1(out))
+        #print("emb", emb.mean(), emb.std())
         return self.fc_out(emb), emb
 
     def feature_list(self, x):
