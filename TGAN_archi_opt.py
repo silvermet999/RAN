@@ -77,16 +77,16 @@ class WideResNet(nn.Module):
                 nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
                 if m.bias is not None:
                     m.bias.data.zero_()
-            elif isinstance(m, nn.BatchNorm1d):
-                m.weight.data.fill_(1)
-                m.bias.data.zero_()
+            # elif isinstance(m, nn.BatchNorm1d):
+            #     m.weight.data.fill_(1)
+            #     m.bias.data.zero_()
 
     def forward(self, x):
         out = self.fc_in(x)
         out = self.block1(out)
         out = self.block2(out)
         out = self.block3(out)
-        out = self.relu(self.bn1(out))
+        out = self.relu(out) #self.bn1(out))
         return self.fc_out(out)
 
     def pred_emb(self, x):
@@ -103,14 +103,14 @@ class WideResNet(nn.Module):
         #print("emb", emb.mean(), emb.std())
         return self.fc_out(emb), emb
 
-    def feature_list(self, x):
-        out_list = []
-        out = self.fc_in(x)
-        out = self.block1(out)
-        out_list.append(out)
-        out = self.block2(out)
-        out_list.append(out)
-        out = self.block3(out)
-        out_list.append(out)
-        out = self.relu(self.bn1(out))
-        return self.fc_out(out), out_list
+    # def feature_list(self, x):
+    #     out_list = []
+    #     out = self.fc_in(x)
+    #     out = self.block1(out)
+    #     out_list.append(out)
+    #     out = self.block2(out)
+    #     out_list.append(out)
+    #     out = self.block3(out)
+    #     out_list.append(out)
+    #     out = self.relu(self.bn1(out))
+    #     return self.fc_out(out), out_list

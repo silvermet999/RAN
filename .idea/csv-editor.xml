@@ -38,6 +38,13 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="/rome_static_medium/sched2/tr27/exp5/bs7/ue37.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
       </map>
     </option>
   </component>

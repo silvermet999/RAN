@@ -128,25 +128,26 @@ def concat_csvs():
         direction="nearest"
     )
 
-    df.to_csv("OOD.csv", index=False)
+    df.to_csv("OOD_sched2.csv", index=False)
     return df
 
-
-df = pd.read_csv("src/OOD.csv", index_col=False)
+df_sched1 = pd.read_csv("src/OOD_sched1.csv", index_col=False)
+df_sched2 = pd.read_csv("src/OOD_sched2.csv", index_col=False)
+df = pd.concat([df_sched1, df_sched2])
 
 df = df.drop(["Unnamed: 4", "Unnamed: 10", "Unnamed: 18", "Unnamed: 28", "Unnamed: 31"], axis=1)
 df = df.dropna(axis=0)
-for col in df.columns:
-    if len(df[col].unique()) == 1:
-        df.drop(col, inplace=True, axis=1)
+# for col in df.columns:
+#     if len(df[col].unique()) == 1:
+#         df.drop(col, inplace=True, axis=1)
 
 # df = df.drop(["slicing_enabled", "power_multiplier", "scheduling_policy", "tx_errors downlink (%)", "ul_rssi",
 #               "dl_pmi", "dl_ri", "ul_n", "cc", "rf_o"], axis=1)
-# "pci", "earfcn",  "ul_ta", "rf_u", "is_attached"
+#"pci", "earfcn",  "ul_ta", "rf_u", "is_attached"
 # report = ProfileReport(df)
 # report.to_file("report_OOD.html")
-
-
+#
+#
 # corr_matrix = df.corr()
 # threshold = 0.75
 # pairs = []
@@ -173,7 +174,7 @@ y = df["attack"]
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=0)
 
 def data_scale(X, enc=None, ohe_columns=None):
-    low_card = X[["rf_u", "dl_turbo", "ul_ta_tier"]]
+    low_card = X[["rf_u", "ul_ta_tier"]]
     ohe = pd.get_dummies(low_card, columns=low_card.columns).astype(int)
     ohe = ohe.reset_index(drop=True)
     if ohe_columns is not None:
@@ -191,9 +192,10 @@ def data_scale(X, enc=None, ohe_columns=None):
     scaled = scaled.reset_index(drop=True)
     X_scaled = pd.concat([ohe, bin, scaled], axis=1)
 
-    return X_scaled, ohe_columns
+    return X_scaled
 
-X_train_sc, ohe_columns = data_scale(X_train, enc=prep.scaler)
-X_test_sc, _  = data_scale(X_test, enc=prep.scaler, ohe_columns=ohe_columns)
+X_train_sc = data_scale(X_train, enc=prep.scaler, ohe_columns=prep.ohe_columns)
+X_test_sc  = data_scale(X_test, enc=prep.scaler, ohe_columns=prep.ohe_columns)
 assert X_train_sc.shape[1] == X_test_sc.shape[1], "column mismatch!"
 assert list(X_train_sc.columns) == list(X_test_sc.columns), "column order mismatch!"
+# X_train_sc.describe().to_csv("desc.csv")

@@ -135,9 +135,10 @@ df = pd.read_csv("src/all.csv", index_col=False)
 
 df = df.drop(["Unnamed: 4", "Unnamed: 10", "Unnamed: 18", "Unnamed: 28", "Unnamed: 31"], axis=1)
 df = df.dropna(axis=0)
-for col in df.columns:
-    if len(df[col].unique()) == 1:
-        df.drop(col, inplace=True, axis=1)
+# for col in df.columns:
+#     if len(df[col].unique()) == 1:
+#         print("col", col)
+#         df.drop(col, inplace=True, axis=1)
 
 # df = df.drop(["slicing_enabled", "power_multiplier", "scheduling_policy", "tx_errors downlink (%)", "ul_rssi",
 #               "dl_pmi", "dl_ri", "ul_n", "cc", "rf_o"], axis=1)
@@ -172,7 +173,7 @@ y = df["attack"]
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=0)
 
 def data_scale(X, enc=None, fit = None, ohe_columns=None):
-    low_card = X[["rf_u", "dl_turbo", "ul_ta_tier"]]
+    low_card = X[["rf_u", "ul_ta_tier"]]
     ohe = pd.get_dummies(low_card, columns=low_card.columns).astype(int)
     ohe = ohe.reset_index(drop=True)
     if ohe_columns is not None:
@@ -200,6 +201,7 @@ X_train_sc, scaler, ohe_columns = data_scale(X_train, enc=None, fit=True)
 X_test_sc, _, _  = data_scale(X_test, enc=scaler, fit=False, ohe_columns=ohe_columns)
 assert X_train_sc.shape[1] == X_test_sc.shape[1], "column mismatch!"
 assert list(X_train_sc.columns) == list(X_test_sc.columns), "column order mismatch!"
+#X_train_sc.describe().to_csv("desc_org.csv")
 # train_cols = set(X_train_sc.columns)
 # test_cols = set(X_test_sc.columns)
 #

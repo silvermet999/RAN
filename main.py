@@ -7,6 +7,9 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import cross_val_score
 import mlflow
+
+import prep_OOD
+
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 os.environ['TORCH_USE_CUDA_DSA'] = "1"
 import numpy as np
@@ -31,7 +34,7 @@ parser = argparse.ArgumentParser()
 # parser.add_argument('src', type=str)
 
 # Optimization options
-parser.add_argument('--epochs', '-e', type=int, default=100, help='Number of epochs to train.')
+parser.add_argument('--epochs', '-e', type=int, default=50, help='Number of epochs to train.')
 parser.add_argument('--learning_rate', '-lr', type=float, default=0.01, help='The initial learning rate.')
 parser.add_argument('--batch_size', '-b', type=int, default=128, help='Batch size.')
 parser.add_argument('--oe_batch_size', type=int, default=256, help='Batch size.')
@@ -39,16 +42,16 @@ parser.add_argument('--test_bs', type=int, default=200)
 parser.add_argument('--momentum', type=float, default=0.9, help='Momentum.')
 parser.add_argument('--decay', '-d', type=float, default=0.0005, help='Weight decay (L2 penalty).')
 # WRN Architecture
-parser.add_argument('--layers', default=146, type=int, help='total number of layers')
+parser.add_argument('--layers', default=58, type=int, help='total number of layers')
 parser.add_argument('--widen-factor', default=10, type=int, help='widen factor')
 parser.add_argument('--droprate', default=0.3, type=float, help='dropout probability')
 # DAL hyper parameters
-parser.add_argument('--gamma', default=1, type=float)
-parser.add_argument('--beta',  default=0.5, type=float)
-parser.add_argument('--rho',   default=0.01, type=float)
-parser.add_argument('--strength', default=0.05, type=float) #0.01
-parser.add_argument('--warmup', type=int, default=0)
-parser.add_argument('--iter', default=20, type=int) #10
+parser.add_argument('--gamma', default=1, type=float) # increase: higher prevention of large shifts // tradeoff: too restricted, no robustness
+parser.add_argument('--beta',  default=0.5, type=float) # higher separation between ID and OOD // forgetting primary target
+parser.add_argument('--rho',   default=0.01, type=float) # higher size of OOD space // OOD overlap with ID
+parser.add_argument('--strength', default=0.01, type=float) # pushes OOD torwards worst case boundary // exploding gradients, overshoot the boundary space
+parser.add_argument('--warmup', type=int, default=0) # time to form class clusters and learn representation before OOD // leaves fewer epochs to learn OOD
+parser.add_argument('--iter', default=10, type=int) # time to find worst case point within purturbation // computational runtime
 # Others
 parser.add_argument('--out_as_pos', action='store_true', help='OE define OOD data as positive.')
 parser.add_argument('--seed', type=int, default=1)
@@ -68,8 +71,10 @@ cudnn.benchmark = True  # fire on all cylinders
 train_dataset = utils.CustomDataset(prep.X_train_sc.to_numpy(), prep.y_train.to_numpy())
 test_dataset = utils.CustomDataset(prep.X_test_sc.to_numpy(), prep.y_test.to_numpy())
 
-train_loader_in, train_loader_out = utils.dataset_function(train_dataset, X = prep.X_train_sc, batch_size_t = args.batch_size, batch_size_o=args.oe_batch_size, train=True)
-test_loader_in, test_loader_out = utils.dataset_function(train_dataset, X = prep.X_test_sc, batch_size_t = args.batch_size, batch_size_o=args.oe_batch_size, train=False)
+train_loader_in, train_loader_out = utils.dataset_function(train_dataset, X = prep_OOD.X_train_sc, batch_size = args.batch_size, batch_size_o=args.oe_batch_size, train=True)
+test_loader_in, test_loader_out = utils.dataset_function(test_dataset, X = prep_OOD.X_test_sc, batch_size = args.batch_size, batch_size_o=args.oe_batch_size, train=False)
+
+
 ood_num_examples = len(prep.X_test_sc) // 5
 expected_ap = ood_num_examples / (ood_num_examples + len(prep.X_test_sc))
 concat = lambda x: np.concatenate(x, axis=0)
@@ -151,7 +156,6 @@ def train(epoch, gamma, debug_hooks=None):
     net.train()
     loss_avg = 0.0
     ce_avg, oe_avg, oe_old_avg = 0.0, 0.0, 0.0
-    train_loader_out.dataset._regenerate()
 
     for batch_idx, (in_set, out_set) in enumerate(zip(train_loader_in, train_loader_out)):
 
@@ -184,6 +188,7 @@ def train(epoch, gamma, debug_hooks=None):
             x_oe = net.fc_out(emb[len(in_set[0]):])
 
         l_oe = - (x_oe.mean(1) - torch.logsumexp(x_oe, dim=1)).mean()
+        # print(x_oe.softmax(1).max(1)[0].mean())
         loss = l_ce + .5 * l_oe
 
 
@@ -210,32 +215,37 @@ def train(epoch, gamma, debug_hooks=None):
 
         sys.stdout.write('\r epoch %2d %d/%d loss %.2f (ce %.2f, oe %.2f)' %
                           (epoch, batch_idx + 1, len(train_loader_in), loss_avg, ce_avg, oe_avg))
+        # print("confidence:", x_oe.softmax(1).max(1).values.mean().item())
+        # print("probs:", x_oe.softmax(1).mean(0))
         # print(f"emb norm: {emb.norm(dim=-1).mean().item():.4f}")
-        # print(f"r_sur: {r_sur.item():.6f}  rho: {args.rho:.4f}  gamma: {gamma.item():.4f}")
+        # relative = emb_bias.norm(dim=1) / emb_oe.norm(dim=1)
+        # print(relative.mean().item())
+        # print(f"r_sur: {r_sur.item():.6f}") #  bias: {emb_bias.norm(dim=1).mean().item():.4f}")
+        # print(f"gamma: {gamma.item():.6f}")
         # print(f"l_oe={l_oe.item():.4f}  floor={math.log(3):.4f}  diff={l_oe.item() - math.log(3):.4f}")
         scheduler.step()
 
     return gamma, loss_avg, ce_avg, oe_avg
 
-def test():
-    net.eval()
-    correct = 0
-    y, c = [], []
-    with torch.no_grad():
-        for data, target in test_loader_in:
-            data, target = data.cuda(), target.cuda()
-            output = net(data)
-            pred = output.data.max(1)[1]
-            correct += pred.eq(target.data).sum().item()
-    return correct / len(test_loader_in.dataset) * 100
+# def test():
+#     net.eval()
+#     correct = 0
+#     y, c = [], []
+#     with torch.no_grad():
+#         for data, target in test_loader_in:
+#             data, target = data.cuda(), target.cuda()
+#             output = net(data)
+#             pred = output.data.max(1)[1]
+#             correct += pred.eq(target.data).sum().item()
+#     return correct / len(test_loader_in.dataset) * 100
 
 
 num_classes = 3
 net = WideResNet(args.layers, num_classes, args.widen_factor, dropRate=args.droprate).cuda()
 
-handles = []
-for h in handles:
-    h.remove()
+# handles = []
+# for h in handles:
+#     h.remove()
 # handles.append(net.block1.register_forward_hook(make_forward_hook('block1')))
 # handles.append(net.block2.register_forward_hook(make_forward_hook('block2')))
 # handles.append(net.block3.register_forward_hook(make_forward_hook('block3')))
@@ -313,6 +323,7 @@ def plots():
 if __name__ == "__main__":
     # process = subprocess.Popen(["mlflow", "server", "--host", "127.0.0.1", "--port", "8080"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     # mlflow.set_tracking_uri(uri="http://127.0.0.1:8080")
+
         gamma = 0.01
 
     # mlflow.set_experiment("OOD")
@@ -333,20 +344,91 @@ if __name__ == "__main__":
                 cm = confusion_m(test_loader_out, in_score)
                 print('\n & %.2f & %.2f & %.2f' % tuple((100 * torch.Tensor(metric_ll).mean(0)).tolist()))
                 print(cm)
-                # torch.save(net.state_dict(), "wr.pt")
+                torch.save(net.state_dict(), f"wr{ce_avg}.pt")
             #     mlflow.log_metric("in_score", in_score, step=epoch)
-            # mlflow.log_metric("gamma", gamma, step=epoch)
-            # mlflow.log_metric("loss_avg", loss_avg, step=epoch)
-            # mlflow.log_metric("ce_avg", ce_avg, step=epoch)
-            # mlflow.log_metric('oe_avg', oe_avg, step=epoch)
             #
 
     #         mlflow.log_metrics({"gamma": gamma, "loss_avg": loss_avg, "ce_avg": ce_avg, 'oe_avg': oe_avg}, step=epoch)
-    #
+    # #
     # mlflow.pytorch.log_model(net, name="model", serialization_format="pickle")
 
 
-# to do
-# re check oe loss, it is included but not moving
-#  epoch  0 91/1916 loss 1.66 (ce 1.08, oe 1.15)emb norm: 13.8760
-# r_sur: 0.016145  rho: 0.0100  gamma: 0.7270
+# epoch  9 1916/1916 loss 1.45 (ce 0.85, oe 1.20)
+#
+#  & 0.88 & 99.70 & 99.72
+# [[26194    69]
+#  [ 1313 24950]]
+#  epoch 19 1916/1916 loss 1.06 (ce 0.43, oe 1.25)
+#
+#  & 0.06 & 99.98 & 99.98
+# [[26261     2]
+#  [ 1313 24950]]
+#  epoch 29 1916/1916 loss 0.93 (ce 0.30, oe 1.27)
+#
+#  & 0.00 & 99.69 & 99.84
+# [[26180    83]
+#  [ 1313 24950]]
+#  epoch 39 1916/1916 loss 0.93 (ce 0.31, oe 1.24)
+#
+#  & 0.00 & 99.92 & 99.96
+# [[26236    27]
+#  [ 1312 24951]]
+# epoch 49 1916/1916 loss 0.81 (ce 0.20, oe 1.23)
+#
+#  & 0.00 & 99.83 & 99.92
+# [[26217    46]
+#  [ 1312 24951]]
+
+# rho : 0.1 -> 0.01
+#  epoch  9 1916/1916 loss 1.77 (ce 1.14, oe 1.26)
+#
+#  & 0.22 & 99.96 & 99.96
+# [[26261     2]
+#  [ 1313 24950]]
+#  epoch 19 1916/1916 loss 1.05 (ce 0.41, oe 1.29)
+#
+#  & 0.08 & 99.68 & 99.82
+# [[26166    97]
+#  [ 1313 24950]]
+#  epoch 29 1916/1916 loss 1.13 (ce 0.49, oe 1.28)
+#
+#  & 0.00 & 99.85 & 99.92
+# [[26215    48]
+#  [ 1313 24950]]
+#  epoch 39 1916/1916 loss 1.02 (ce 0.39, oe 1.26)
+#
+#  & 0.00 & 99.99 & 99.99
+# [[26232    31]
+#  [ 1313 24950]]
+#  epoch 49 1916/1916 loss 0.82 (ce 0.20, oe 1.24)
+#
+#  & 0.00 & 100.00 & 100.00
+# [[26263     0]
+#  [ 1313 24950]]
+
+# str and iter: 0.05-20 -> default
+# epoch  9 1916/1916 loss 1.30 (ce 0.70, oe 1.20)&
+#
+#  & 58.40 & 83.87 & 85.32
+# [[12951 13312]
+#  [ 1313 24950]]
+#  epoch 19 1916/1916 loss 1.46 (ce 0.86, oe 1.19)
+#
+#  & 0.03 & 99.67 & 99.82
+# [[26150   113]
+#  [ 1313 24950]]
+#  epoch 29 1916/1916 loss 0.80 (ce 0.21, oe 1.18)
+#
+#  & 0.00 & 99.80 & 99.88
+# [[26181    82]
+#  [ 1313 24950]]
+#  epoch 39 1916/1916 loss 0.97 (ce 0.40, oe 1.15)
+#
+#  & 0.00 & 99.59 & 99.79
+# [[26142   121]
+#  [ 1312 24951]]
+#  epoch 49 1916/1916 loss 0.79 (ce 0.23, oe 1.13)
+#
+#  & 0.00 & 99.69 & 99.84
+# [[26171    92]
+#  [ 1313 24950]]
