@@ -2,6 +2,7 @@ import math
 import os
 import subprocess
 
+import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import confusion_matrix
@@ -42,7 +43,7 @@ parser.add_argument('--test_bs', type=int, default=200)
 parser.add_argument('--momentum', type=float, default=0.9, help='Momentum.')
 parser.add_argument('--decay', '-d', type=float, default=0.0005, help='Weight decay (L2 penalty).')
 # WRN Architecture
-parser.add_argument('--layers', default=58, type=int, help='total number of layers')
+parser.add_argument('--layers', default=53, type=int, help='total number of layers')
 parser.add_argument('--widen-factor', default=10, type=int, help='widen factor')
 parser.add_argument('--droprate', default=0.3, type=float, help='dropout probability')
 # DAL hyper parameters
@@ -409,6 +410,23 @@ if __name__ == "__main__":
                 # print(ood_correct.describe().to_csv("correct.csv"))
 
                 torch.save(net.state_dict(), f"wr{ce_avg}.pt")
+
+                records = []
+                worst_rows, worst_indices, worst_scores = utils.get_worst_attacks(out_score, fn_indices,
+                                                                            test_loader_out.dataset, n=10)
+
+                for idx, score in zip(worst_indices, worst_scores):
+                    row = test_loader_out[idx][0].numpy()
+                    records.append({
+                        'epoch': epoch,
+                        'index': int(idx),
+                        'ood_score': float(score),
+                        **{f'feature_{i}': v for i, v in enumerate(row)}
+                    })
+
+                df = pd.DataFrame(records)
+                df.to_csv(f"high_conf_attacks_epoch{epoch}.csv", index=False)
+
             #     mlflow.log_metric("in_score", in_score, step=epoch)
             #
 

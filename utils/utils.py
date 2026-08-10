@@ -108,3 +108,12 @@ def dataset_function(dataset, X, batch_size, batch_size_o, train=True):
         test_loader = DataLoader(test_subset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=False)
         ood_test_loader = DataLoader(ood_test_dataset, batch_size=batch_size_o, shuffle=False)
         return test_loader, ood_test_loader
+
+
+def get_worst_attacks(out_score, fn_indices, ood_dataset, n=10):
+    fn_scores = out_score[fn_indices]
+    sorted_order = np.argsort(fn_scores)
+    worst_indices = fn_indices[sorted_order][:n]
+    worst_scores = fn_scores[sorted_order][:n]
+    worst_rows = np.stack([ood_dataset[i][0].numpy() for i in worst_indices])
+    return worst_rows, worst_indices, worst_scores

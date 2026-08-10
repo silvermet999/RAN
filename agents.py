@@ -36,7 +36,7 @@ llm = ChatOllama(
 
 
 main_instruction = PromptTemplate(template="""
-    You are an expert in cybersecurity, specifically network intrusion detection. Assist a cybersecurity analyst in identifying network attacks.
+    You are an expert in cybersecurity, specifically network intrusion detection. Assist a cybersecurity analyst in identifying network attacks from the dataset provided.
     Answer the following questions to determine if there is an attack:
         - "Are there any UEs showing abnormal downlink block error rates right now?"
         - "Which base stations have the largest gap between requested and granted PRBs?"
@@ -51,12 +51,13 @@ main_instruction = PromptTemplate(template="""
     __INPUT__
     analyst goal: {analyst_goal}
     feature list: {feature_list}
+    dataset: {dataset}
 
     __OUTPUT__
     Answer:
 
     """,
-    input_variables=["analyst_goal", "feature_list"]
+    input_variables=["analyst_goal", "feature_list", "dataset"]
 )
 
 
@@ -87,18 +88,20 @@ class MessageState(TypedDict, total=False):
     user_input: str
     feature_list: str
     report_template: str
+    dataset: Any
 
 
 def agent_node(state: MessageState):
     user_goal = state["messages"][0].content
     feature_list = state.get("feature_list")
     report_template = state.get("report_template")
+    dataset = state.get("dataset")
 
     analyst_output = main_instruction | llm | (lambda x: x.content)
     report = report_prompt | llm | (lambda x: x.content)
 
     start = time.time()
-    analyst = analyst_output.invoke({"analyst_goal": user_goal, "feature_list": feature_list})
+    analyst = analyst_output.invoke({"analyst_goal": user_goal, "feature_list": feature_list, "dataset": dataset})
     print("analyst: ", (time.time() - start) / 60)
     start = time.time()
     reporter = report.invoke({"main_agent": analyst_output, "report_template": report_template})
