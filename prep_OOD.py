@@ -131,47 +131,54 @@ def concat_csvs():
     df.to_csv("sched2.csv", index=False)
     return df
 
-df_sched1 = pd.read_csv("src/sched0.csv", index_col=False)
-df_sched2 = pd.read_csv("src/sched1.csv", index_col=False)
-df = pd.concat([df_sched1, df_sched2])
+df_sched0 = pd.read_csv("src/sched0.csv", index_col=False)
+df_sched1 = pd.read_csv("src/sched1.csv", index_col=False)
+#df = pd.concat([df_sched0, df_sched1])
+def data_prep(df):
+    df = df.drop(["Unnamed: 4", "Unnamed: 10", "Unnamed: 18", "Unnamed: 28", "Unnamed: 31"], axis=1)
+    df = df.dropna(axis=0)
+    # for col in df.columns:
+    #     if len(df[col].unique()) == 1:
+    #         df.drop(col, inplace=True, axis=1)
 
-df = df.drop(["Unnamed: 4", "Unnamed: 10", "Unnamed: 18", "Unnamed: 28", "Unnamed: 31"], axis=1)
-df = df.dropna(axis=0)
-# for col in df.columns:
-#     if len(df[col].unique()) == 1:
-#         df.drop(col, inplace=True, axis=1)
+    # df = df.drop(["slicing_enabled", "power_multiplier", "scheduling_policy", "tx_errors downlink (%)", "ul_rssi",
+    #               "dl_pmi", "dl_ri", "ul_n", "cc", "rf_o"], axis=1)
+    #"pci", "earfcn",  "ul_ta", "rf_u", "is_attached"
+    # report = ProfileReport(df)
+    # report.to_file("report_OOD.html")
+    #
+    #
+    # corr_matrix = df.corr()
+    # threshold = 0.75
+    # pairs = []
+    # cols = corr_matrix.columns
+    # for i in range(len(cols)):
+    #     for j in range(i+1, len(cols)):
+    #         val = corr_matrix.iloc[i, j]
+    #         if val > threshold or val < -threshold:
+    #             pairs.append((cols[i], cols[j], val))
+    # pairs.sort(key=lambda x: abs(x[2]), reverse=True)
+    # for col1, col2, val in pairs:
+    #     print(f"{col1} <-> {col2}: {val:.3f}")
+    #
+    df['is_detached'] = (df['ul_ta'] == 0.0).astype(int)
+    df['ta_attach_diverge'] = ((df['is_attached'] == 1) & (df['ul_ta'] == 0.0)).astype(int)
+    df['impossible_state'] = ((df['is_attached'] == 0) & (df['ul_ta'] > 0.0)).astype(int)
+    df['ul_ta_tier'] = df['ul_ta'].map({0.52: 1, 1.0: 2, 2.1: 3}).fillna(0).astype(int)
 
-# df = df.drop(["slicing_enabled", "power_multiplier", "scheduling_policy", "tx_errors downlink (%)", "ul_rssi",
-#               "dl_pmi", "dl_ri", "ul_n", "cc", "rf_o"], axis=1)
-#"pci", "earfcn",  "ul_ta", "rf_u", "is_attached"
-# report = ProfileReport(df)
-# report.to_file("report_OOD.html")
-#
-#
-# corr_matrix = df.corr()
-# threshold = 0.75
-# pairs = []
-# cols = corr_matrix.columns
-# for i in range(len(cols)):
-#     for j in range(i+1, len(cols)):
-#         val = corr_matrix.iloc[i, j]
-#         if val > threshold or val < -threshold:
-#             pairs.append((cols[i], cols[j], val))
-# pairs.sort(key=lambda x: abs(x[2]), reverse=True)
-# for col1, col2, val in pairs:
-#     print(f"{col1} <-> {col2}: {val:.3f}")
-#
-df['is_detached'] = (df['ul_ta'] == 0.0).astype(int)
-df['ta_attach_diverge'] = ((df['is_attached'] == 1) & (df['ul_ta'] == 0.0)).astype(int)
-df['impossible_state'] = ((df['is_attached'] == 0) & (df['ul_ta'] > 0.0)).astype(int)
-df['ul_ta_tier'] = df['ul_ta'].map({0.52: 1, 1.0: 2, 2.1: 3}).fillna(0).astype(int)
+    df = df.drop(["pci", "is_attached", "ul_ta", "pl", "earfcn"], axis=1)
+    return df
 
-df = df.drop(["pci", "is_attached", "ul_ta", "pl", "earfcn"], axis=1)
-X = df.drop("attack", axis=1)
-y = df["attack"]
+df_sched0_preped = data_prep(df_sched0)
+df_sched1_preped = data_prep(df_sched1)
 
-# cat: earfcn rf_u is_attached rsrp dl_mac_ns dl_snr dl_turbo dl_bler ul_buff ul_bler rf_l
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=0)
+X_train = df_sched0_preped.drop("attack", axis=1)
+y_train = df_sched0_preped["attack"]
+
+X_test = df_sched1_preped.drop("attack", axis=1)
+y_test = df_sched1_preped["attack"]
+
+#X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=0)
 
 def data_scale(X, enc=None, ohe_columns=None):
     low_card = X[["rf_u", "ul_ta_tier"]]

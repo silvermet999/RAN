@@ -18,7 +18,7 @@ import argparse
 import torch
 import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
-from TGAN_archi_opt import WideResNet
+from DAL_archi import WideResNet
 from utils import utils
 import prep
 from utils.display_results import get_measures, print_measures
