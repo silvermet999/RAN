@@ -4,8 +4,8 @@ src/all.csv
 src/OOD_sched1.csv
 src/OOD_sched2.csv
 rome_static_medium/
-report.html
+src/report.html
 .env
 mlflow.db
 src/OOD.csv
-report_OOD.html
+src/report_OOD.html

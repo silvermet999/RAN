@@ -21,17 +21,17 @@ from typing_extensions import Annotated
 memory = MemorySaver()
 
 llm = ChatOllama(
-    model="llama3",
+    model="qwen3.5:0.8b",
     base_url="http://localhost:11434",
     temperature=0.7,
 )
 
 
-if "ANTHROPIC_API_KEY" not in os.environ:
-    os.environ["ANTHROPIC_API_KEY"] = getpass.getpass("Enter your Anthropic API key: ")
-
-
-llm_claude = ChatAnthropic(model="claude-haiku-4-5-20251001")
+# if "ANTHROPIC_API_KEY" not in os.environ:
+#     os.environ["ANTHROPIC_API_KEY"] = getpass.getpass("Enter your Anthropic API key: ")
+#
+#
+# llm_claude = ChatAnthropic(model="claude-haiku-4-5-20251001")
 
 
 
@@ -114,12 +114,16 @@ def build_agent():
     workflow.add_edge("agent", END)
     return workflow.compile(checkpointer=memory)
 # agent = build_agent()
-# async def result():
-#    result_proposal = await agent.ainvoke(
-#                        {"messages": "Are there any UEs showing abnormal downlink block error rates right now?"},
+# def result():
+#    result_proposal = agent.invoke(
+#                        {"messages": "Are there any UEs showing abnormal downlink block error rates right now?",
+#                                     "feature_list": ,
+#                                     "report_template": ,
+#                         },
 #                        config={"configurable": {"thread_id": "session2"}}
 #                    )
 #    return result_proposal
+# result()
 # asyncio.run(result())
 
 # async def run_conversation_proposal(agent, user_goal):

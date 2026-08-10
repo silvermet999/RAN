@@ -64,12 +64,12 @@ def conversation_function(submitted, user_input):
         #     st.session_state["agent_state"]["feature_list"] =
         # else:
         with open('feature_definitions.txt', 'r') as f:
-            print("def")
             st.session_state["agent_state"]["feature_list"] = f.read()
+            print(st.session_state["agent_state"]["feature_list"])
 
         with open('report_template.txt', 'r') as f:
-            print("template")
             st.session_state["agent_state"]["report_template"] = f.read()
+            print(st.session_state["agent_state"]["report_template"])
 
         st.session_state["agent_state"]["messages"].append(HumanMessage(content=user_input))
         print("ui", st.session_state["agent_state"]["messages"])
@@ -91,7 +91,6 @@ def conversation_function(submitted, user_input):
                                                     },
                                     config={"configurable":{"thread_id": "session"}})
             print("result: ", (time.time() - start)/60)
-
         latest_msg_ai = result["messages"][-1] 
         if isinstance(latest_msg_ai, AIMessage):
             st.session_state["agent_state"]["messages"].append(latest_msg_ai)

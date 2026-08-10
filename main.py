@@ -34,7 +34,7 @@ parser = argparse.ArgumentParser()
 # parser.add_argument('src', type=str)
 
 # Optimization options
-parser.add_argument('--epochs', '-e', type=int, default=50, help='Number of epochs to train.')
+parser.add_argument('--epochs', '-e', type=int, default=100, help='Number of epochs to train.')
 parser.add_argument('--learning_rate', '-lr', type=float, default=0.01, help='The initial learning rate.')
 parser.add_argument('--batch_size', '-b', type=int, default=128, help='Batch size.')
 parser.add_argument('--oe_batch_size', type=int, default=256, help='Batch size.')
@@ -47,8 +47,8 @@ parser.add_argument('--widen-factor', default=10, type=int, help='widen factor')
 parser.add_argument('--droprate', default=0.3, type=float, help='dropout probability')
 # DAL hyper parameters
 parser.add_argument('--gamma', default=1, type=float) # increase: higher prevention of large shifts // tradeoff: too restricted, no robustness
-parser.add_argument('--beta',  default=0.5, type=float) # higher separation between ID and OOD // forgetting primary target
-parser.add_argument('--rho',   default=0.01, type=float) # higher size of OOD space // OOD overlap with ID
+parser.add_argument('--beta',  default=0.9, type=float) # higher separation between ID and OOD // forgetting primary target
+parser.add_argument('--rho',   default=0.1, type=float) # higher size of OOD space // OOD overlap with ID
 parser.add_argument('--strength', default=0.01, type=float) # pushes OOD torwards worst case boundary // exploding gradients, overshoot the boundary space
 parser.add_argument('--warmup', type=int, default=0) # time to form class clusters and learn representation before OOD // leaves fewer epochs to learn OOD
 parser.add_argument('--iter', default=10, type=int) # time to find worst case point within purturbation // computational runtime
@@ -80,28 +80,51 @@ expected_ap = ood_num_examples / (ood_num_examples + len(prep.X_test_sc))
 concat = lambda x: np.concatenate(x, axis=0)
 to_np = lambda x: x.data.cpu().numpy()
 
-def get_ood_scores(loader, in_dist=False):
-    _score = []
+# def get_ood_scores(loader, in_dist=False):
+#     _score = []
+#     net.eval()
+#     with torch.no_grad():
+#         for batch_idx, (data, target) in enumerate(loader):
+#             if batch_idx >= ood_num_examples // args.test_bs and in_dist is False:
+#                 break
+#             data, target = data.to(torch.float).cuda(), target.cuda()
+#             output = net(data)
+#             smax = to_np(F.softmax(output, dim=1))
+#             _score.append(-np.max(smax, axis=1))
+#     if in_dist:
+#         return concat(_score).copy() # , concat(_right_score).copy(), concat(_wrong_score).copy()
+#     else:
+#         return concat(_score)[:ood_num_examples].copy()
+
+def get_ood_scores_with_indices(loader):
+    scores = []
+    indices = []
+
     net.eval()
+
     with torch.no_grad():
         for batch_idx, (data, target) in enumerate(loader):
-            if batch_idx >= ood_num_examples // args.test_bs and in_dist is False:
+            if batch_idx >= ood_num_examples // args.test_bs:
                 break
-            data, target = data.to(torch.float).cuda(), target.cuda()
+            data = data.to(torch.float).cuda()
             output = net(data)
-            smax = to_np(F.softmax(output, dim=1))
-            _score.append(-np.max(smax, axis=1))
-    if in_dist:
-        return concat(_score).copy() # , concat(_right_score).copy(), concat(_wrong_score).copy()
-    else:
-        return concat(_score)[:ood_num_examples].copy()
+            smax = F.softmax(output, dim=1)
+            batch_scores = -smax.max(dim=1).values
+            scores.append(batch_scores.cpu().numpy())
+            start = batch_idx * args.test_bs
+            end = start + len(data)
+            indices.extend(range(start, end))
+    return (
+        np.concatenate(scores)[:ood_num_examples],
+        np.array(indices[:ood_num_examples])
+    )
 
 def get_and_print_results(ood_loader, in_score, num_to_avg=1):
     net.eval()
     aurocs, auprs, fprs = [], [], []
     for _ in range(num_to_avg):
-        out_score = get_ood_scores(ood_loader)
-        if args.out_as_pos:
+        out_score, _ = get_ood_scores_with_indices(ood_loader)
+        if args.out_as_pos: # OE's defines out samples as positive
             measures = get_measures(out_score, in_score)
         else:
             measures = get_measures(-in_score, -out_score)
@@ -110,25 +133,52 @@ def get_and_print_results(ood_loader, in_score, num_to_avg=1):
     print_measures(auroc, aupr, fpr, '')
     return fpr, auroc, aupr
 
-def confusion_m(ood_loader, in_score, threshold=None, recall_level=0.95):
+
+def get_confusion_details(ood_loader, in_score, recall_level=0.95):
+
     net.eval()
-    out_score = get_ood_scores(ood_loader)
 
-    y_true = np.concatenate([np.ones(len(out_score)), np.zeros(len(in_score))])
-    y_score = np.concatenate([out_score, in_score])
+    out_score, ood_indices = get_ood_scores_with_indices(ood_loader)
 
-    if threshold is None:
-        desc_score_indices = np.argsort(y_score)[::-1]
-        y_score_sorted = y_score[desc_score_indices]
-        y_true_sorted = y_true[desc_score_indices]
-        tps = np.cumsum(y_true_sorted)
-        recall = tps / tps[-1]
-        cutoff_idx = np.argmin(np.abs(recall - recall_level))
-        threshold = y_score_sorted[cutoff_idx]
+    y_true = np.concatenate([
+        np.ones(len(out_score)),
+        np.zeros(len(in_score))
+    ])
+
+    y_score = np.concatenate([
+        out_score,
+        in_score
+    ])
+
+    desc_score_indices = np.argsort(y_score)[::-1]
+
+    y_score_sorted = y_score[desc_score_indices]
+    y_true_sorted = y_true[desc_score_indices]
+
+    tps = np.cumsum(y_true_sorted)
+    recall = tps / tps[-1]
+
+    cutoff_idx = np.argmin(
+        np.abs(recall - recall_level)
+    )
+
+    threshold = y_score_sorted[cutoff_idx]
 
     y_pred = (y_score >= threshold).astype(int)
+
     cm = confusion_matrix(y_true, y_pred)
-    return cm
+
+    ood_pred = y_pred[:len(out_score)]
+    false_negative_mask = ood_pred == 0
+    false_negative_indices = ood_indices[false_negative_mask]
+
+    return (
+        cm,
+        threshold,
+        out_score,
+        false_negative_indices
+    )
+
 
 debug_stats = {}
 
@@ -338,12 +388,26 @@ if __name__ == "__main__":
 
             if epoch % 10 == 9:
                 net.eval()
-                in_score = get_ood_scores(test_loader_in, in_dist=True)
+                in_score, _ = get_ood_scores_with_indices(test_loader_in)
                 metric_ll = []
                 metric_ll.append(get_and_print_results(test_loader_out, in_score))
-                cm = confusion_m(test_loader_out, in_score)
+                cm, threshold, out_score, fn_indices = get_confusion_details(
+                    test_loader_out,
+                    in_score
+                )
                 print('\n & %.2f & %.2f & %.2f' % tuple((100 * torch.Tensor(metric_ll).mean(0)).tolist()))
                 print(cm)
+                # print("Threshold:", threshold)
+                # print("Indices:", fn_indices[:20])
+                # false_negatives = prep_OOD.X_test_sc.iloc[fn_indices]
+                # ood_correct = prep_OOD.X_test_sc.drop(prep_OOD.X_test_sc.index[fn_indices])
+                #
+                # print("False negatives:")
+                # print(false_negatives.describe().to_csv("false.csv"))
+                #
+                # print("\nCorrect OOD:")
+                # print(ood_correct.describe().to_csv("correct.csv"))
+
                 torch.save(net.state_dict(), f"wr{ce_avg}.pt")
             #     mlflow.log_metric("in_score", in_score, step=epoch)
             #
@@ -406,29 +470,427 @@ if __name__ == "__main__":
 # [[26263     0]
 #  [ 1313 24950]]
 
-# str and iter: 0.05-20 -> default
-# epoch  9 1916/1916 loss 1.30 (ce 0.70, oe 1.20)&
+# default
+# epoch  9 1916/1916 loss 1.36 (ce 0.76, oe 1.20)& 0.92 & 99.08 & 99.17
 #
-#  & 58.40 & 83.87 & 85.32
-# [[12951 13312]
+#  & 0.92 & 99.08 & 99.17
+# [[16571   197]
 #  [ 1313 24950]]
-#  epoch 19 1916/1916 loss 1.46 (ce 0.86, oe 1.19)
+#  epoch 19 1916/1916 loss 0.83 (ce 0.23, oe 1.20)& 0.05 & 99.07 & 99.34
 #
-#  & 0.03 & 99.67 & 99.82
-# [[26150   113]
+#  & 0.05 & 99.07 & 99.34
+# [[16553   215]
 #  [ 1313 24950]]
-#  epoch 29 1916/1916 loss 0.80 (ce 0.21, oe 1.18)
+#  epoch 29 1916/1916 loss 1.90 (ce 1.30, oe 1.20)& 1.48 & 98.99 & 97.30
 #
-#  & 0.00 & 99.80 & 99.88
-# [[26181    82]
+#  & 1.48 & 98.99 & 97.30
+# [[16537   231]
 #  [ 1313 24950]]
-#  epoch 39 1916/1916 loss 0.97 (ce 0.40, oe 1.15)
+#  epoch 39 1916/1916 loss 2.17 (ce 1.57, oe 1.20)& 3.19 & 98.76 & 97.30
 #
-#  & 0.00 & 99.59 & 99.79
-# [[26142   121]
+#  & 3.19 & 98.76 & 97.30
+# [[16533   235]
+#  [ 1313 24950]]
+#  epoch 49 1916/1916 loss 1.84 (ce 1.24, oe 1.20)& 0.06 & 99.90 & 99.90
+#
+#  & 0.06 & 99.90 & 99.90
+# [[16740    28]
+#  [ 1313 24950]]
+#  epoch 59 1916/1916 loss 2.00 (ce 1.42, oe 1.16)& 0.01 & 98.86 & 99.25
+#
+#  & 0.01 & 98.86 & 99.25
+# [[16554   214]
+#  [ 1313 24950]]
+#  epoch 69 1916/1916 loss 1.36 (ce 0.78, oe 1.17)& 0.57 & 99.43 & 99.45
+#
+#  & 0.57 & 99.43 & 99.45
+# [[16498   270]
+#  [ 1313 24950]]
+#  epoch 79 1916/1916 loss 1.35 (ce 0.77, oe 1.14)& 0.00 & 100.00 & 99.99
+#
+#  & 0.00 & 100.00 & 99.99
+# [[16766     2]
+#  [ 1313 24950]]
+#  epoch 89 1916/1916 loss 0.89 (ce 0.32, oe 1.15)& 0.00 & 100.00 & 100.00
+#
+#  & 0.00 & 100.00 & 100.00
+# [[16768     0]
+#  [ 1313 24950]]
+#  epoch 99 1916/1916 loss 1.05 (ce 0.48, oe 1.14)& 0.00 & 99.99 & 99.99
+#
+#  & 0.00 & 99.99 & 99.99
+# [[16766     2]
 #  [ 1312 24951]]
-#  epoch 49 1916/1916 loss 0.79 (ce 0.23, oe 1.13)
+
+# str 0.05
+#  epoch  9 1916/1916 loss 1.78 (ce 1.18, oe 1.22)& 5.97 & 99.13 & 98.69
 #
-#  & 0.00 & 99.69 & 99.84
-# [[26171    92]
+#  & 5.97 & 99.13 & 98.69
+# [[15697  1071]
+#  [ 1313 24950]]
+#  epoch 19 1916/1916 loss 1.33 (ce 0.72, oe 1.22)& 0.07 & 99.73 & 99.76
+#
+#  & 0.07 & 99.73 & 99.76
+# [[16697    71]
+#  [ 1313 24950]]
+#  epoch 29 1916/1916 loss 1.58 (ce 0.96, oe 1.23)& 0.21 & 99.56 & 99.64
+#
+#  & 0.21 & 99.56 & 99.64
+# [[16691    77]
+#  [ 1313 24950]]
+#  epoch 39 1916/1916 loss 1.73 (ce 1.11, oe 1.24)& 0.16 & 99.95 & 99.93
+#
+#  & 0.16 & 99.95 & 99.93
+# [[16764     4]
+#  [ 1313 24950]]
+#  epoch 49 1916/1916 loss 1.39 (ce 0.76, oe 1.26)& 0.72 & 99.83 & 99.73
+#
+#  & 0.72 & 99.83 & 99.73
+# [[16748    20]
+#  [ 1313 24950]]
+#  epoch 59 1916/1916 loss 1.10 (ce 0.49, oe 1.21)& 0.00 & 99.87 & 99.89
+#
+#  & 0.00 & 99.87 & 99.89
+# [[16724    44]
+#  [ 1313 24950]]
+#  epoch 69 1916/1916 loss 1.05 (ce 0.46, oe 1.19)& 0.00 & 99.96 & 99.97
+#
+#  & 0.00 & 99.96 & 99.97
+# [[16760     8]
+#  [ 1313 24950]]
+#  epoch 79 1916/1916 loss 1.08 (ce 0.50, oe 1.16)& 0.00 & 100.00 & 100.00
+#
+#  & 0.00 & 100.00 & 100.00
+# [[16768     0]
+#  [ 1313 24950]]
+#  epoch 89 1916/1916 loss 1.05 (ce 0.47, oe 1.15)& 0.00 & 99.99 & 99.99
+#
+#  & 0.00 & 99.99 & 99.99
+# [[16765     3]
+#  [ 1313 24950]]
+#  epoch 99 1916/1916 loss 0.83 (ce 0.25, oe 1.15)& 0.00 & 99.99 & 99.99
+#
+#  & 0.00 & 99.99 & 99.99
+# [[16766     2]
+#  [ 1312 24951]]
+
+
+# lr 0.01
+# epoch  9 1916/1916 loss 1.56 (ce 0.98, oe 1.16)& 15.69 & 96.60 & 96.27
+#
+#  & 15.69 & 96.60 & 96.27
+# [[14859  1909]
+#  [ 1313 24950]]
+#  epoch 19 1916/1916 loss 1.24 (ce 0.65, oe 1.18)& 1.51 & 99.72 & 99.59
+#
+#  & 1.51 & 99.72 & 99.59
+# [[16640   128]
+#  [ 1313 24950]]
+#  epoch 29 1916/1916 loss 1.27 (ce 0.66, oe 1.21)& 0.15 & 99.96 & 99.93
+#
+#  & 0.15 & 99.96 & 99.93
+# [[16763     5]
+#  [ 1313 24950]]
+#  epoch 39 1916/1916 loss 0.99 (ce 0.38, oe 1.21)& 0.05 & 99.98 & 99.98
+#
+#  & 0.05 & 99.98 & 99.98
+# [[16767     1]
+#  [ 1313 24950]]
+#  epoch 49 1916/1916 loss 1.73 (ce 1.13, oe 1.21)& 0.05 & 99.99 & 99.98
+#
+#  & 0.05 & 99.99 & 99.98
+# [[16767     1]
+#  [ 1313 24950]]
+#  epoch 59 1916/1916 loss 1.18 (ce 0.57, oe 1.22)& 0.00 & 100.00 & 99.99
+#
+#  & 0.00 & 100.00 & 99.99
+# [[16768     0]
+#  [ 1313 24950]]
+#  epoch 69 1916/1916 loss 0.81 (ce 0.20, oe 1.23)& 0.00 & 99.99 & 99.99
+#
+#  & 0.00 & 99.99 & 99.99
+# [[16765     3]
+#  [ 1313 24950]]
+#  epoch 79 1916/1916 loss 1.19 (ce 0.57, oe 1.24)& 0.00 & 100.00 & 100.00
+#
+#  & 0.00 & 100.00 & 100.00
+# [[16768     0]
+#  [ 1313 24950]]
+#  epoch 89 1916/1916 loss 0.84 (ce 0.23, oe 1.23)& 0.00 & 100.00 & 100.00
+#
+#  & 0.00 & 100.00 & 100.00
+# [[16767     1]
+#  [ 1313 24950]]
+#  epoch 99 1916/1916 loss 1.06 (ce 0.45, oe 1.22)& 0.00 & 99.99 & 99.99
+#
+#  & 0.00 & 99.99 & 99.99
+# [[16766     2]
+#  [ 1313 24950]]
+
+
+
+# iter 20
+#  epoch  9 1916/1916 loss 1.56 (ce 0.98, oe 1.15)& 9.68 & 97.53 & 96.76
+#
+#  & 9.68 & 97.53 & 96.76
+# [[15112  1656]
+#  [ 1313 24950]]
+#  epoch 19 1916/1916 loss 1.11 (ce 0.53, oe 1.17)& 1.33 & 99.74 & 99.61
+#
+#  & 1.33 & 99.74 & 99.61
+# [[16712    56]
+#  [ 1313 24950]]
+#  epoch 29 1916/1916 loss 1.51 (ce 0.90, oe 1.21)& 0.33 & 99.91 & 99.87
+#
+#  & 0.33 & 99.91 & 99.87
+# [[16755    13]
+#  [ 1313 24950]]
+#  epoch 39 1916/1916 loss 1.59 (ce 0.99, oe 1.20)& 0.09 & 99.97 & 99.96
+#
+#  & 0.09 & 99.97 & 99.96
+# [[16763     5]
+#  [ 1313 24950]]
+#  epoch 49 1916/1916 loss 1.89 (ce 1.29, oe 1.21)& 0.06 & 99.98 & 99.97
+#
+#  & 0.06 & 99.98 & 99.97
+# [[16761     7]
+#  [ 1313 24950]]
+#  epoch 59 1916/1916 loss 1.13 (ce 0.52, oe 1.22)& 0.02 & 99.99 & 99.98
+#
+#  & 0.02 & 99.99 & 99.98
+# [[16763     5]
+#  [ 1313 24950]]
+#  epoch 69 1916/1916 loss 1.21 (ce 0.60, oe 1.21)& 0.02 & 99.97 & 99.97
+#
+#  & 0.02 & 99.97 & 99.97
+# [[16760     8]
+#  [ 1313 24950]]
+#  epoch 79 1916/1916 loss 1.04 (ce 0.43, oe 1.23)& 0.00 & 99.99 & 99.99
+#
+#  & 0.00 & 99.99 & 99.99
+# [[16763     5]
+#  [ 1313 24950]]
+#  epoch 89 1916/1916 loss 0.87 (ce 0.26, oe 1.21)& 0.01 & 99.98 & 99.98
+#
+#  & 0.01 & 99.98 & 99.98
+# [[16760     8]
+#  [ 1313 24950]]
+#  epoch 99 1916/1916 loss 1.12 (ce 0.52, oe 1.21)& 0.01 & 99.99 & 99.98
+#
+#  & 0.01 & 99.99 & 99.98
+# [[16762     6]
+#  [ 1313 24950]]
+
+
+# rho 0.05
+#  epoch  9 1916/1916 loss 2.05 (ce 1.45, oe 1.20)& 1.03 & 99.41 & 99.30
+#
+#  & 1.03 & 99.41 & 99.30
+# [[16421   347]
+#  [ 1313 24950]]
+#  epoch 19 1916/1916 loss 1.71 (ce 1.12, oe 1.19)& 13.17 & 91.20 & 73.17
+#
+#  & 13.17 & 91.20 & 73.17
+# [[ 1415 15353]
+#  [ 1313 24950]]
+#  epoch 29 1916/1916 loss 1.26 (ce 0.66, oe 1.20)& 0.08 & 99.43 & 99.57
+#
+#  & 0.08 & 99.43 & 99.57
+# [[16641   127]
+#  [ 1313 24950]]
+#  epoch 39 1916/1916 loss 1.79 (ce 1.20, oe 1.18)& 0.04 & 99.17 & 99.43
+#
+#  & 0.04 & 99.17 & 99.43
+# [[16588   180]
+#  [ 1313 24950]]
+#  epoch 49 1916/1916 loss 1.42 (ce 0.83, oe 1.19)& 0.08 & 99.95 & 99.93
+#
+#  & 0.08 & 99.95 & 99.93
+# [[16748    20]
+#  [ 1313 24950]]
+#  epoch 59 1916/1916 loss 1.14 (ce 0.55, oe 1.18)& 0.21 & 99.88 & 99.84
+#
+#  & 0.21 & 99.88 & 99.84
+# [[16684    84]
+#  [ 1313 24950]]
+#  epoch 69 1916/1916 loss 1.21 (ce 0.62, oe 1.17)& 0.00 & 99.54 & 99.70
+#
+#  & 0.00 & 99.54 & 99.70
+# [[16676    92]
+#  [ 1313 24950]]
+#  epoch 79 1916/1916 loss 1.11 (ce 0.53, oe 1.15)& 0.00 & 99.65 & 99.77
+#
+#  & 0.00 & 99.65 & 99.77
+# [[16698    70]
+#  [ 1313 24950]]
+#  epoch 89 1916/1916 loss 0.92 (ce 0.35, oe 1.15)& 0.00 & 99.69 & 99.80
+#
+#  & 0.00 & 99.69 & 99.80
+# [[16703    65]
+#  [ 1313 24950]]
+#  epoch 99 1916/1916 loss 0.85 (ce 0.27, oe 1.15)& 0.00 & 99.67 & 99.79
+#
+#  & 0.00 & 99.67 & 99.79
+# [[16707    61]
+#  [ 1313 24950]]
+
+
+# rho + str
+# epoch  9 1916/1916 loss 1.60 (ce 0.99, oe 1.23)& 0.27 & 99.95 & 99.92
+#
+#  & 0.27 & 99.95 & 99.92
+# [[16767     1]
+#  [ 1313 24950]]
+#  epoch 19 1916/1916 loss 1.02 (ce 0.40, oe 1.24)& 0.02 & 99.86 & 99.90
+#
+#  & 0.02 & 99.86 & 99.90
+# [[16738    30]
+#  [ 1313 24950]]
+#  epoch 29 1916/1916 loss 1.04 (ce 0.41, oe 1.25)& 0.01 & 99.77 & 99.85
+#
+#  & 0.01 & 99.77 & 99.85
+# [[16726    42]
+#  [ 1313 24950]]
+#  epoch 39 1916/1916 loss 0.96 (ce 0.33, oe 1.26)& 0.00 & 99.76 & 99.84
+#
+#  & 0.00 & 99.76 & 99.84
+# [[16718    50]
+#  [ 1313 24950]]
+#  epoch 49 1916/1916 loss 0.93 (ce 0.31, oe 1.24)& 0.01 & 99.99 & 99.99
+#
+#  & 0.01 & 99.99 & 99.99
+# [[16768     0]
+#  [ 1313 24950]]
+#  epoch 59 1916/1916 loss 1.20 (ce 0.57, oe 1.25)& 0.46 & 99.39 & 99.41
+#
+#  & 0.46 & 99.39 & 99.41
+# [[16504   264]
+#  [ 1313 24950]]
+#  epoch 69 1916/1916 loss 0.85 (ce 0.23, oe 1.24)& 0.00 & 99.98 & 99.97
+#
+#  & 0.00 & 99.98 & 99.97
+# [[16743    25]
+#  [ 1313 24950]]
+#  epoch 79 1916/1916 loss 0.95 (ce 0.34, oe 1.22)& 0.00 & 99.98 & 99.98
+#
+#  & 0.00 & 99.98 & 99.98
+# [[16760     8]
+#  [ 1313 24950]]
+#  epoch 89 1916/1916 loss 0.85 (ce 0.24, oe 1.21)& 0.00 & 99.99 & 99.99
+#
+#  & 0.00 & 99.99 & 99.99
+# [[16766     2]
+#  [ 1313 24950]]
+#  epoch 99 1916/1916 loss 0.87 (ce 0.26, oe 1.21)& 0.00 & 99.98 & 99.98
+#
+#  & 0.00 & 99.98 & 99.98
+# [[16762     6]
+#  [ 1313 24950]]
+
+
+
+# beta 0.9
+# epoch  9 1916/1916 loss 1.53 (ce 0.94, oe 1.18)& 8.34 & 97.42 & 97.75
+#
+#  & 8.34 & 97.42 & 97.75
+# [[15859   909]
+#  [ 1313 24950]]
+#  epoch 19 1916/1916 loss 1.83 (ce 1.24, oe 1.18)& 0.53 & 99.66 & 99.57
+#
+#  & 0.53 & 99.66 & 99.57
+# [[16668   100]
+#  [ 1313 24950]]
+#  epoch 29 1916/1916 loss 1.86 (ce 1.26, oe 1.21)& 0.27 & 99.03 & 99.21
+#
+#  & 0.27 & 99.03 & 99.21
+# [[16553   215]
+#  [ 1313 24950]]
+#  epoch 39 1916/1916 loss 2.30 (ce 1.72, oe 1.17)& 79.76 & 92.47 & 94.32
+#
+#  & 79.76 & 92.47 & 94.32
+# [[14973  1795]
+#  [ 1313 24950]]
+#  epoch 49 1916/1916 loss 1.60 (ce 1.02, oe 1.17)& 66.73 & 93.78 & 93.49
+#
+#  & 66.73 & 93.78 & 93.49
+# [[15517  1251]
+#  [ 1313 24950]]
+#  epoch 59 1916/1916 loss 2.08 (ce 1.50, oe 1.16)& 0.14 & 97.66 & 98.29
+#
+#  & 0.14 & 97.66 & 98.29
+# [[16208   560]
+#  [ 1313 24950]]
+#  epoch 69 1916/1916 loss 0.82 (ce 0.26, oe 1.13)& 0.43 & 96.75 & 97.81
+#
+#  & 0.43 & 96.75 & 97.81
+# [[16072   696]
+#  [ 1313 24950]]
+#  epoch 79 1916/1916 loss 1.11 (ce 0.53, oe 1.15)& 0.12 & 97.35 & 98.23
+#
+#  & 0.12 & 97.35 & 98.23
+# [[16256   512]
+#  [ 1313 24950]]
+#  epoch 89 1916/1916 loss 1.07 (ce 0.49, oe 1.15)& 0.13 & 97.61 & 98.41
+#
+#  & 0.13 & 97.61 & 98.41
+# [[16290   478]
+#  [ 1313 24950]]
+#  epoch 99 1916/1916 loss 0.77 (ce 0.20, oe 1.13)& 0.05 & 98.35 & 98.93
+#
+#  & 0.05 & 98.35 & 98.93
+# [[16446   322]
+#  [ 1313 24950]]
+
+
+
+# lr
+#  epoch  9 1916/1916 loss 1.45 (ce 0.87, oe 1.15)& 20.24 & 96.17 & 94.88
+#
+#  & 20.24 & 96.17 & 94.88
+# [[13526  3242]
+#  [ 1313 24950]]
+#  epoch 19 1916/1916 loss 1.10 (ce 0.52, oe 1.17)& 0.95 & 99.77 & 99.68
+#
+#  & 0.95 & 99.77 & 99.68
+# [[16749    19]
+#  [ 1313 24950]]
+#  epoch 29 1916/1916 loss 1.37 (ce 0.77, oe 1.19)& 0.18 & 99.95 & 99.93
+#
+#  & 0.18 & 99.95 & 99.93
+# [[16763     5]
+#  [ 1313 24950]]
+#  epoch 39 1916/1916 loss 1.41 (ce 0.81, oe 1.20)& 0.05 & 99.98 & 99.97
+#
+#  & 0.05 & 99.98 & 99.97
+# [[16766     2]
+#  [ 1313 24950]]
+#  epoch 49 1916/1916 loss 1.33 (ce 0.72, oe 1.21)& 0.11 & 99.96 & 99.94
+#
+#  & 0.11 & 99.96 & 99.94
+# [[16763     5]
+#  [ 1313 24950]]
+#  epoch 59 1916/1916 loss 1.84 (ce 1.25, oe 1.19)& 0.03 & 99.99 & 99.98
+#
+#  & 0.03 & 99.99 & 99.98
+# [[16766     2]
+#  [ 1313 24950]]
+#  epoch 69 1916/1916 loss 0.92 (ce 0.32, oe 1.19)& 0.02 & 99.99 & 99.98
+#
+#  & 0.02 & 99.99 & 99.98
+# [[16766     2]
+#  [ 1313 24950]]
+#  epoch 79 1916/1916 loss 1.22 (ce 0.62, oe 1.21)& 0.02 & 99.98 & 99.98
+#
+#  & 0.02 & 99.98 & 99.98
+# [[16763     5]
+#  [ 1313 24950]]
+#  epoch 89 1916/1916 loss 1.00 (ce 0.39, oe 1.21)& 0.02 & 99.99 & 99.98
+#
+#  & 0.02 & 99.99 & 99.98
+# [[16763     5]
+#  [ 1313 24950]]
+#  epoch 99 1916/1916 loss 1.51 (ce 0.91, oe 1.21)& 0.01 & 99.99 & 99.98
+#
+#  & 0.01 & 99.99 & 99.98
+# [[16763     5]
 #  [ 1313 24950]]
