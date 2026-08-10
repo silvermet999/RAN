@@ -1,8 +1,8 @@
 .venv/
 __pycache__/
-src/all.csv
-src/OOD_sched1.csv
-src/OOD_sched2.csv
+src/sched0.csv
+src/sched1.csv
+src/sched2.csv
 rome_static_medium/
 src/report.html
 .env

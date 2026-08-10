@@ -127,11 +127,11 @@ def concat_csvs():
         direction="nearest"
     )
 
-    df.to_csv("all.csv", index=False)
+    df.to_csv("sched2.csv", index=False)
     return df
 
 
-df = pd.read_csv("src/all.csv", index_col=False)
+df = pd.read_csv("src/sched2.csv", index_col=False)
 
 df = df.drop(["Unnamed: 4", "Unnamed: 10", "Unnamed: 18", "Unnamed: 28", "Unnamed: 31"], axis=1)
 df = df.dropna(axis=0)

@@ -8,8 +8,8 @@ from sklearn.ensemble import RandomForestClassifier
 from umap import UMAP
 from sklearn.metrics.pairwise import rbf_kernel
 
-rr = pd.read_csv("src/all.csv")
-wf = pd.read_csv("src/OOD_sched1.csv")
+rr = pd.read_csv("src/sched0.csv")
+wf = pd.read_csv("src/sched1.csv")
 pf = pd.read_csv("src/OOD.csv")
 
 rr = rr.drop(["Unnamed: 4", "Unnamed: 10", "Unnamed: 18", "Unnamed: 28", "Unnamed: 31"], axis=1)

@@ -128,11 +128,11 @@ def concat_csvs():
         direction="nearest"
     )
 
-    df.to_csv("OOD_sched2.csv", index=False)
+    df.to_csv("sched2.csv", index=False)
     return df
 
-df_sched1 = pd.read_csv("src/OOD_sched1.csv", index_col=False)
-df_sched2 = pd.read_csv("src/OOD_sched2.csv", index_col=False)
+df_sched1 = pd.read_csv("src/sched0.csv", index_col=False)
+df_sched2 = pd.read_csv("src/sched1.csv", index_col=False)
 df = pd.concat([df_sched1, df_sched2])
 
 df = df.drop(["Unnamed: 4", "Unnamed: 10", "Unnamed: 18", "Unnamed: 28", "Unnamed: 31"], axis=1)
