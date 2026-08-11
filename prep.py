@@ -165,7 +165,7 @@ df['ta_attach_diverge'] = ((df['is_attached'] == 1) & (df['ul_ta'] == 0.0)).asty
 df['impossible_state'] = ((df['is_attached'] == 0) & (df['ul_ta'] > 0.0)).astype(int)
 df['ul_ta_tier'] = df['ul_ta'].map({0.52: 1, 1.0: 2, 2.1: 3}).fillna(0).astype(int)
 
-df = df.drop(["pci", "is_attached", "ul_ta", "pl", "earfcn"], axis=1)
+df = df.drop(["pci", "earfcn", "pl", "is_attached", "ul_ta"], axis=1)
 X = df.drop("attack", axis=1)
 y = df["attack"]
 

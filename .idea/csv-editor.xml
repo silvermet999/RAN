@@ -3,6 +3,13 @@
   <component name="CsvFileAttributes">
     <option name="attributeMap">
       <map>
+        <entry key="/high_conf_attacks_epoch9.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="/rome_static_medium/sched0/tr0/exp1/bs1/bs1.csv">
           <value>
             <Attribute>

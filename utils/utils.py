@@ -90,23 +90,23 @@ class CustomDataset(Dataset):
         return sample, label
 
 # Train eval test split of pytorch src
-def dataset_function(dataset, X, batch_size, batch_size_o, train=True):
-    total_size = len(dataset)
-    test_size = total_size // 5
-    train_size = total_size - test_size
-    train_subset = Subset(dataset, range(train_size))
-    test_subset = Subset(dataset, range(train_size, total_size))
-    ood_dataset = SyntheticOODDataset(X, regenerate_fn=make_ood_batch)
-    ood_test_dataset = SyntheticOODDataset(X, regenerate_fn=make_ood_batch)
+def dataset_function(ID_dataset, OOD, batch_size, batch_size_o, train=True):
+    # total_size = len(dataset)
+    # test_size = total_size // 5
+    # train_size = total_size - test_size
+    # train_subset = Subset(dataset, range(train_size))
+    # test_subset = Subset(dataset, range(train_size, total_size))
+    # ood_dataset = SyntheticOODDataset(X, regenerate_fn=make_ood_batch)
+    # ood_test_dataset = SyntheticOODDataset(X, regenerate_fn=make_ood_batch)
 
     if train:
-        train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=False)
-        train_loader_ood = DataLoader(ood_dataset, batch_size=batch_size_o, shuffle=True, num_workers=4, pin_memory=False)
+        train_loader = DataLoader(ID_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=False)
+        train_loader_ood = DataLoader(OOD, batch_size=batch_size_o, shuffle=True, num_workers=4, pin_memory=False)
         return train_loader, train_loader_ood
 
     else:
-        test_loader = DataLoader(test_subset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=False)
-        ood_test_loader = DataLoader(ood_test_dataset, batch_size=batch_size_o, shuffle=False)
+        test_loader = DataLoader(ID_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=False)
+        ood_test_loader = DataLoader(OOD, batch_size=batch_size_o, shuffle=False)
         return test_loader, ood_test_loader
 
 
@@ -115,5 +115,5 @@ def get_worst_attacks(out_score, fn_indices, ood_dataset, n=10):
     sorted_order = np.argsort(fn_scores)
     worst_indices = fn_indices[sorted_order][:n]
     worst_scores = fn_scores[sorted_order][:n]
-    worst_rows = np.stack([ood_dataset[i][0].numpy() for i in worst_indices])
+    worst_rows = np.stack([ood_dataset[i][0] for i in worst_indices])
     return worst_rows, worst_indices, worst_scores
