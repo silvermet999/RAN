@@ -1,3 +1,6 @@
+import os
+import sys
+
 import pandas as pd
 from pathlib import Path
 import re
@@ -5,9 +8,9 @@ import re
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OrdinalEncoder, StandardScaler
 from sklearn.preprocessing import MinMaxScaler
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-
-root_dir = Path("rome_static_medium/sched0/tr0")
+root_dir = Path("../rome_static_medium/sched0/tr0")
 
 def slices():
     dfs = []
@@ -131,7 +134,7 @@ def concat_csvs():
     return df
 
 
-df = pd.read_csv("src/sched2.csv", index_col=False)
+df = pd.read_csv("/home/silver/PycharmProjects/RAN2/src/sched2.csv", index_col=False)
 
 df = df.drop(["Unnamed: 4", "Unnamed: 10", "Unnamed: 18", "Unnamed: 28", "Unnamed: 31"], axis=1)
 df = df.dropna(axis=0)

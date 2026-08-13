@@ -1,14 +1,10 @@
 import pandas as pd
 from pathlib import Path
 import re
-from ydata_profiling import ProfileReport
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OrdinalEncoder, StandardScaler
-from sklearn.preprocessing import MinMaxScaler
 
 import prep
 
-root_dir = Path("rome_static_medium/sched2/tr27")
+root_dir = Path("../rome_static_medium/sched2/tr27")
 
 def slices():
     dfs = []
@@ -131,8 +127,8 @@ def concat_csvs():
     df.to_csv("sched2.csv", index=False)
     return df
 
-df_sched0 = pd.read_csv("src/sched0.csv", index_col=False)
-df_sched1 = pd.read_csv("src/sched1.csv", index_col=False)
+df_sched0 = pd.read_csv("/home/silver/PycharmProjects/RAN2/src/sched0.csv", index_col=False)
+df_sched1 = pd.read_csv("/home/silver/PycharmProjects/RAN2/src/sched1.csv", index_col=False)
 #df = pd.concat([df_sched0, df_sched1])
 def data_prep(df):
     df = df.drop(["Unnamed: 4", "Unnamed: 10", "Unnamed: 18", "Unnamed: 28", "Unnamed: 31"], axis=1)

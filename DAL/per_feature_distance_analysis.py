@@ -74,7 +74,7 @@ def flag_discriminative_features(dist_df, ks_alpha= 0.05, w_norm_threshold = 0.2
     )
     return df
 
-dist_df = compute_feature_distances(prep.df, prep_OOD.df_sched1)
+dist_df = compute_feature_distances(prep.X_test_sc, prep_OOD.X_test_sc)
 dist_df = flag_discriminative_features(dist_df)
 
 pd.set_option("display.width", 120)
@@ -86,11 +86,11 @@ print(dist_df[[
 
 
 # PF, WF: discriminative
-# False    33
+# False    41
 # True     17
 
 # PF, RR: discriminative
-# False    32
+# False    40
 # True     18
 
 # RR, WF: discriminative

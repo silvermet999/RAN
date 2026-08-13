@@ -1,0 +1,51 @@
+- 'time': Elapsed time in milliseconds since the start of the experiment.
+- 'rsrp': Reference Signal Received Power. Measures how strong the signal from the base station is at the UE. More negative = weaker signal. Core indicator of coverage quality.
+- 'cfo': Carrier Frequency Offset (Hz). Frequency difference between the UE's local oscillator and the BS's transmitted carrier frequency. A non-zero value likely reflects emulated channel impairments. A sudden large CFO shift is a strong fake-BS indicator, since a rogue transmitter would have a different oscillator reference.
+- 'dl_mcs_ns': Downlink MCS Number of Samples. Tells you how statistically reliable the MCS average is. Low dl_mcs_ns means few samples, so the MCS value is less trustworthy that interval.
+- 'dl_snr': Downlink Signal-to-Noise Ratio (dB). Measures how much stronger the desired signal is relative to background noise as seen by the UE receiver. Higher = cleaner channel.
+- 'dl_turbo': Downlink Turbo Decoder Iterations. Values close to 1.0 = channel is clean, decoded on first pass. Values climbing toward 2.0+ = channel is degrading, decoder struggling. This is one of the most sensitive early-warning indicators of interference or jamming before the rise in dl_bler.
+- 'dl_brate_ue': Downlink Bitrate at the UE side (bps). Throughput as observed at the UE receiver. 
+- 'dl_bler': Downlink Block Error Rate (%). In normal operation should be near 0%; target in LTE link adaptation is typically ~10% (outer loop power control target). Spikes above 20–30% indicate serious channel problems or active interference.
+- 'ul_mcs_ns': Uplink MCS Number of Samples. Same concept as dl_mcs_ns but for uplink; the number of uplink transport blocks used to compute the reported ul_mcs average.
+- 'ul_buff': Uplink Buffer Size (bytes). Values range from 192k to 194k bytes during active iPerf traffic. Bytes queued at the UE waiting to be transmitted uplink. In normal operation it cycles between filling and draining. Persistent growth = UE can't transmit fast enough (uplink congestion or scheduling starvation). Sudden drop to zero = UE stopped generating traffic or was forced silent.
+- 'ul_brate_ue': Uplink Bitrate at the UE side (bps). The UE's own measurement of how fast it is transmitting uplink data.
+- 'ul_bler': Uplink Block Error Rate (%). Same concept as dl_bler but for the uplink. Fraction of UE transmissions that the BS failed to decode. High ul_bler while dl_bler is normal indicates a UE-specific uplink problem: low power headroom (phr), interference on the UE's allocated PRBs, or a spoofed/rogue UE transmitting on the same RNTI.
+- 'rf_o': RF Underflow counter. Counts the number of underflow events at the RF frontend; moments where the software couldn't supply samples to the radio fast enough, causing a gap in transmission.
+- 'rf_l': RF Loss. Path loss at the radio frontend level. Where rsrp is the received power, rf_l captures the aggregate loss between transmitter and receiver at the hardware RF chain level.
+- 'nof_ue': Number of UEs currently associated with/served by that base station.
+- 'dl_brate_bs': Aggregate downlink bitrate served by the base station (Mbps), summed across all its UEs.
+- 'ul_brate_bs': Aggregate uplink bitrate received by the base station (Mbps), summed across all its UEs.
+- 'num_ues': Number of UEs attached to the base station at that sample (often equivalent to/redundant with nof_ue, sometimes taken at a different granularity, e.g. per-slice vs per-cell).
+- 'IMSI': International Mobile Subscriber Identity: unique identifier for the UE/subscriber.
+- 'RNTI': Radio Network Temporary Identifier: the temporary MAC-layer ID assigned to the UE for the duration of its connection to a given cell.
+- 'slicing_enabled': Boolean flag indicating whether network slicing is active on that base station.
+- 'slice_id': Identifier of the network slice (e.g., 0/1/2, commonly mapped to eMBB / MTC / URLLC traffic classes).
+- 'slice_prb': Number of PRBs allocated to that specific slice.
+- 'power_multiplier': Scaling factor applied to transmit power for that slice/UE (used in some ColO-RAN experiments to model power-control policies).
+- 'scheduling_policy': The MAC scheduler policy applied to that slice; typically one of Round-Robin (RR), Proportionally Fair (PF), or Waterfilling (WF).
+- 'dl_mcs_s': Downlink Modulation and Coding Scheme index used for that UE (higher = higher order modulation/coding rate, indicates better channel conditions)
+- 'dl_n_samples': Number of downlink samples/measurements collected in the reporting interval (typically ~250 ms window in SCOPE)
+- 'dl_buffer [bytes]': Size of the downlink transmission buffer/queue (bytes) waiting to be sent to the UE
+- 'tx_brate downlink [Mbps]': Downlink bitrate actually transmitted to that UE (Mbps)
+- 'tx_pkts downlink': Number of downlink packets transmitted to the UE in the interval
+- 'tx_errors downlink (%)': Percentage of downlink transmissions that resulted in errors (e.g., failed HARQ)
+- 'dl_cqi': Downlink Channel Quality Indicator reported by the UE, reflects perceived downlink channel quality, drives MCS selection
+- 'ul_mcs_s': Uplink MCS index used for that UE's uplink transmissions
+- 'ul_n_samples': Number of uplink samples/measurements in the reporting interval
+- 'ul_buffer [bytes]': Size of the uplink buffer (bytes) the UE has reported/queued to send
+- 'rx_brate uplink [Mbps]': Uplink bitrate received from that UE (Mbps)
+- 'rx_pkts uplink': Number of uplink packets received from the UE
+- 'rx_errors uplink (%)': Percentage of uplink receptions with errors
+- 'ul_rssi': Uplink Received Signal Strength Indicator (often not meaningful in the Colosseum emulation, hence excluded in some derivative works like TRACTOR).
+- 'ul_sinr': Uplink Signal-to-Interference-plus-Noise Ratio; key indicator of uplink channel quality.
+- 'phr': Power Headroom Report; difference between the UE's maximum transmit power and the power actually used, indicates remaining transmit power margin.
+- 'sum_requested_prbs': Total number of Physical Resource Blocks requested by/for the UE in the interval.
+- 'sum_granted_prbs': Total number of PRBs actually granted/allocated to the UE by the scheduler.
+- 'dl_pmi': Downlink Precoding Matrix Indicator; MIMO precoding feedback from the UE
+- 'dl_ri': Downlink Rank Indicator. This is MIMO feedback reported by the UE to the base station, indicating how many independent spatial layers (transmission "streams") the UE's current channel conditions can support. A rank of 1 means the channel only supports single-stream transmission; rank 2 means the UE sees good enough spatial separation for 2-layer MIMO. It's paired with dl_pmi (Precoding Matrix Indicator) and dl_cqi to drive the base station's downlink scheduling and precoding decisions.
+- 'ul_n': uplink number of samples collected in the reporting window, typically the ~250 ms SCOPE reporting interval. It sits right where ul_n_samples appears in the canonical KPI ordering (between ul_mcs and ul_buffer).
+- 'ul_turbo_iters': Number of turbo decoder iterations required by the base station's receiver to successfully decode the uplink transport block from that UE. Turbo codes decode iteratively; a clean, high-SINR signal typically converges in fewer iterations, while noisy/marginal signals need more iterations (up to a max cap, after which decoding fails). It's effectively a proxy for uplink link quality / decoding difficulty. Useful for spotting degraded uplink conditions or interference even when ul_sinr alone doesn't tell the whole story.
+- 'is_detached': Where ul_ta = 0.0. ul_ta is Uplink Timing Advance: how far in time the UE pre-advances its transmission so it arrives at the BS at the right moment.
+- 'ta_attach_diverge': Where is_attached = 1.0 and ul_ta = 0.0. is_attached is a boolean (0/1); whether the UE is currently attached to the network.
+- 'impossible_state': Where is_attached = 0.0 and ul_ta > 0.0. Higher value in ul_ta = UE is physically farther from the BS.
+- 'ul_ta_tier': The approximate UE distance from BS (ul_ta). Values are 0.52µs, 1.0µs or 2.1µs. 0.52µs means 78m (very close UE), 1.0 µs means 150m (moderate distance) and 2.1 µs means 315m (furthest UEs in the emulated scenario)

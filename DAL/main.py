@@ -1,13 +1,9 @@
-import math
 import os
-import subprocess
 
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import cross_val_score
-import mlflow
 
 import prep_OOD
 
@@ -437,7 +433,7 @@ if __name__ == "__main__":
     # #
     # mlflow.pytorch.log_model(net, name="model", serialization_format="pickle")
 
-
+# PF, RR, WF
 #  epoch  9 1710/2397 loss 0.87 (ce 0.320997, oe 1.105882)& 0.01 & 99.98 & 99.97
 #
 #  & 0.01 & 99.98 & 99.97
@@ -463,3 +459,31 @@ if __name__ == "__main__":
 #  & 0.00 & 99.91 & 99.94
 # [[16752    16]
 #  [ 1312 24984]]
+
+
+#PF, WF, RR
+#  epoch  9 1501/2397 loss 0.93 (ce 0.376968, oe 1.110689)& 2.37 & 99.17 & 98.73
+#
+#  & 2.37 & 99.17 & 98.73
+# [[16513   255]
+#  [ 1315 24981]]
+#  epoch 19 1501/2397 loss 0.91 (ce 0.353085, oe 1.109342)& 0.02 & 99.98 & 99.97
+#
+#  & 0.02 & 99.98 & 99.97
+# [[16750    18]
+#  [ 1315 24981]]
+#  epoch 29 1501/2397 loss 0.83 (ce 0.275283, oe 1.113800)& 0.01 & 99.88 & 99.92
+#
+#  & 0.01 & 99.88 & 99.92
+# [[16748    20]
+#  [ 1315 24981]]
+#  epoch 39 1501/2397 loss 0.83 (ce 0.276339, oe 1.114403)& 0.00 & 99.98 & 99.98
+#
+#  & 0.00 & 99.98 & 99.98
+# [[16764     4]
+#  [ 1313 24983]]
+#  epoch 49 1501/2397 loss 0.81 (ce 0.255903, oe 1.110734)& 0.01 & 99.96 & 99.97
+#
+#  & 0.01 & 99.96 & 99.97
+# [[16762     6]
+#  [ 1310 24986]]
