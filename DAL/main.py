@@ -374,7 +374,7 @@ if __name__ == "__main__":
     # process = subprocess.Popen(["mlflow", "server", "--host", "127.0.0.1", "--port", "8080"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     # mlflow.set_tracking_uri(uri="http://127.0.0.1:8080")
 
-        gamma = 0.01
+        # gamma = 0.01
 
     # mlflow.set_experiment("OOD")
     # mlflow.pytorch.autolog()
@@ -417,14 +417,14 @@ if __name__ == "__main__":
                 for idx, score in zip(worst_indices, worst_scores):
                     row = test_loader_out.dataset[idx][0]
                     records.append({
-                        'epoch': epoch,
                         'index': int(idx),
                         'ood_score': float(score),
                         **{f'feature_{i}': v for i, v in enumerate(row)}
                     })
 
                 df = pd.DataFrame(records)
-                df.to_csv(f"high_conf_attacks_epoch{epoch}.csv", index=False)
+                df.columns = list(df.columns[:2]) + list(prep.X_train_sc.columns)
+                df.to_csv(f"models/high_conf_attacks_epoch.csv", index=False)
 
             #     mlflow.log_metric("in_score", in_score, step=epoch)
             #

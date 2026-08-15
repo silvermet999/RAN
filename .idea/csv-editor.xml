@@ -38,6 +38,13 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="/models/high_conf_attacks.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="/rome_static_medium/sched0/tr0/exp1/bs1/bs1.csv">
           <value>
             <Attribute>
