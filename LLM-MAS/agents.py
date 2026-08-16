@@ -44,19 +44,27 @@ llm = ChatOllama(
 #         - "Are there any timestamps where ta_attach_diverge = 1 outside of known DRX windows?"
 #         - "Which UEs have ul_bler spiking while their dl_bler remains normal?"
 
+# main_instruction = PromptTemplate(template="""
+#     You are an expert in cybersecurity, specifically network intrusion detection. Assist a cybersecurity analyst in identifying network attacks from the dataset provided.
+#
+#     __INPUT__
+#     analyst goal: {analyst_goal}
+#     dataset: {dataset}
+#
+#     __OUTPUT__
+#     Answer:
+#
+#     """,
+#     input_variables=["analyst_goal", "dataset"]
+# )
 main_instruction = PromptTemplate(template="""
-    You are an expert in cybersecurity, specifically network intrusion detection. Assist a cybersecurity analyst in identifying network attacks from the dataset provided.
+    Answer the user question using the dataset
     
-    __INPUT__
-    analyst goal: {analyst_goal}
-    dataset: {dataset}
-
-    __OUTPUT__
-    Answer:
-
+    Dataset attack sample: {dataset}
+    
+    If the user asks about the meaning of a feature in the dataset: {feature_list}
     """,
-    input_variables=["analyst_goal", "dataset"]
-)
+    input_variables=["analyst_goal", "feature_list", "dataset"])
 
 
 report_prompt = PromptTemplate(
@@ -92,6 +100,7 @@ class MessageState(TypedDict, total=False):
 
 def analyst_node(state: MessageState):
     user_goal = state["messages"][-1].content
+    print("USER GOAL", user_goal)
     # feature_list = state.get("feature_list")
     dataset_csv = state.get("dataset")
 
@@ -110,8 +119,8 @@ def analyst_node(state: MessageState):
 
     start = time.time()
     analyst = analyst_chain.invoke({
-        "analyst_goal": user_goal,
-        # "feature_list": feature_list,
+        #"analyst_goal": user_goal,
+        "feature_list": feature_list,
         "dataset": dataset_str,
     })
     print("analyst: ", (time.time() - start) / 60)
@@ -155,7 +164,7 @@ with open('/home/silver/PycharmProjects/RAN2/LLM-MAS/feature_definitions.txt', '
 with open('/home/silver/PycharmProjects/RAN2/LLM-MAS/report_template.txt', 'r') as f:
     report_template = f.read()
 
-dataset = pd.read_csv("/home/silver/PycharmProjects/RAN2/models/high_conf_attacks_epoch9.csv")
+dataset = pd.read_csv("/home/silver/PycharmProjects/RAN2/models/high_conf_attacks.csv")
 dataset_csv = dataset.to_csv(index=False)
 
 agent = build_agent()
@@ -164,14 +173,14 @@ def result():
         {
             "messages": [
                 HumanMessage(
-                    content="Analyze the provided dataset and determine whether there are any UEs showing abnormal downlink block error rates."
+                    content="Are any UEs showing abnormal downlink block error rates?"
                 )
             ],
-            # "feature_list": feature_list,
+            "feature_list": feature_list,
             # "report_template": report_template,
             "dataset": dataset_csv,
         },
-        config={"configurable": {"thread_id": "session2"}},
+        config={"configurable": {"thread_id": "session0"}},
     )
 
     print("\n=== FINAL MESSAGES ===")

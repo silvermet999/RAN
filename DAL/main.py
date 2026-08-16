@@ -318,6 +318,19 @@ scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda step: 
 # else:
 #     pass
 
+def test():
+    net.load_state_dict(torch.load("/home/silver/PycharmProjects/RAN2/models/wr0.0525528912927857.pt"))
+    net.eval()
+    correct = 0
+    y, c = [], []
+    with torch.no_grad():
+        for data, target in test_loader_in:
+            data, target = data.to(torch.float).cuda(), target.cuda()
+            output = net(data)
+            pred = output.data.max(1)[1]
+            correct += pred.eq(target.data).sum().item()
+    return correct / len(test_loader_in.dataset) * 100
+# 98.51
 
 def plots():
     in_batch, _ = next(iter(train_loader_in))
@@ -424,7 +437,7 @@ if __name__ == "__main__":
 
                 df = pd.DataFrame(records)
                 df.columns = list(df.columns[:2]) + list(prep.X_train_sc.columns)
-                df.to_csv(f"models/high_conf_attacks_epoch.csv", index=False)
+                df.to_csv(f"models/high_conf_attacks_2.csv", index=False)
 
             #     mlflow.log_metric("in_score", in_score, step=epoch)
             #
