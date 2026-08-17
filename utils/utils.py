@@ -110,7 +110,12 @@ def dataset_function(ID_dataset, OOD, batch_size, batch_size_o, train=True):
 def get_worst_attacks(out_score, fn_indices, ood_dataset, n=10):
     fn_scores = out_score[fn_indices]
     sorted_order = np.argsort(fn_scores)
+
     worst_indices = fn_indices[sorted_order][:n]
     worst_scores = fn_scores[sorted_order][:n]
-    worst_rows = np.stack([ood_dataset[i][0] for i in worst_indices])
-    return worst_rows, worst_indices, worst_scores
+
+    worst_labels = np.array([
+        ood_dataset[i][-1] for i in worst_indices
+    ])
+
+    return worst_indices, worst_scores, worst_labels

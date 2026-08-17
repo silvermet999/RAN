@@ -1,5 +1,7 @@
 import os
 
+os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+os.environ['TORCH_USE_CUDA_DSA'] = "1"
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import confusion_matrix
@@ -7,8 +9,7 @@ from sklearn.model_selection import cross_val_score
 
 import prep_OOD
 
-os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
-os.environ['TORCH_USE_CUDA_DSA'] = "1"
+
 import numpy as np
 import sys
 import argparse
@@ -26,12 +27,11 @@ from sklearn.decomposition import PCA
 # IF CUDA RELATED PROBLEMS
 # sudo rmmod nvidia_uvm
 # sudo modprobe nvidia_uvm
-
 parser = argparse.ArgumentParser()
 # parser.add_argument('src', type=str)
 
 # Optimization options
-parser.add_argument('--epochs', '-e', type=int, default=50, help='Number of epochs to train.')
+parser.add_argument('--epochs', '-e', type=int, default=2, help='Number of epochs to train.')
 parser.add_argument('--learning_rate', '-lr', type=float, default=0.01, help='The initial learning rate.')
 parser.add_argument('--batch_size', '-b', type=int, default=128, help='Batch size.')
 parser.add_argument('--oe_batch_size', type=int, default=256, help='Batch size.')
@@ -387,7 +387,7 @@ if __name__ == "__main__":
     # process = subprocess.Popen(["mlflow", "server", "--host", "127.0.0.1", "--port", "8080"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     # mlflow.set_tracking_uri(uri="http://127.0.0.1:8080")
 
-        # gamma = 0.01
+        gamma = 0.01
 
     # mlflow.set_experiment("OOD")
     # mlflow.pytorch.autolog()
@@ -399,7 +399,7 @@ if __name__ == "__main__":
         for epoch in range(args.epochs):
             gamma, loss_avg, ce_avg, oe_avg = train(epoch, gamma, debug_hooks=True)
 
-            if epoch % 10 == 9:
+            if epoch % 2 == 0:
                 net.eval()
                 in_score, _ = get_ood_scores_with_indices(test_loader_in)
                 metric_ll = []
@@ -424,19 +424,22 @@ if __name__ == "__main__":
                 torch.save(net.state_dict(), f"wr{ce_avg}.pt")
 
                 records = []
-                worst_rows, worst_indices, worst_scores = utils.get_worst_attacks(out_score, fn_indices,
-                                                                            test_loader_out.dataset, n=10)
+                worst_indices, worst_scores, worst_labels = utils.get_worst_attacks(
+                    out_score, fn_indices, test_loader_out.dataset, n=10)
 
-                for idx, score in zip(worst_indices, worst_scores):
-                    row = test_loader_out.dataset[idx][0]
+                for idx, label, score in zip(worst_indices, worst_labels, worst_scores):
                     records.append({
                         'index': int(idx),
-                        'ood_score': float(score),
-                        **{f'feature_{i}': v for i, v in enumerate(row)}
+                        'label': int(label),
+                        'ood_score': abs(float(score)),
+                        **{
+                            f'{i}': v
+                            for i, v in enumerate(test_loader_out.dataset[idx][0])
+                        }
                     })
 
                 df = pd.DataFrame(records)
-                df.columns = list(df.columns[:2]) + list(prep.X_train_sc.columns)
+                df.columns = list(df.columns[:3]) + list(prep.X_train_sc.columns)
                 df.to_csv(f"models/high_conf_attacks_2.csv", index=False)
 
             #     mlflow.log_metric("in_score", in_score, step=epoch)

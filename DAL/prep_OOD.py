@@ -47,8 +47,10 @@ def ue():
             return 0
         elif ue_num in attack_1:
             return 1
-        else:
+        elif ue_num in attack_2:
             return 2
+        else:
+            pass
 
     for i in range(1, 5 + 1):
         for j in range(1, 7 + 1):

@@ -3,21 +3,19 @@ import io
 import json
 import re
 import time
-from typing import Annotated, Any, Dict, List
+from typing import List
 
 import pandas as pd
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_ollama import ChatOllama
-from langchain_core.tools import tool
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.prompts import PromptTemplate
 from typing_extensions import TypedDict
 from langgraph.graph import START, END, StateGraph, add_messages
-from langchain_core.runnables import RunnableSequence
-from langgraph.types import CachePolicy
-import getpass
+
 import os
 from langchain_anthropic import ChatAnthropic
+from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from typing_extensions import Annotated
 
 memory = MemorySaver()
@@ -25,9 +23,15 @@ memory = MemorySaver()
 llm = ChatOllama(
     model="CyberCrew/notmythos-8b:latest",
     base_url="http://localhost:11434",
-    temperature=0.7,
+    temperature=0.1,
 )
-
+# endpoint = HuggingFaceEndpoint(
+#     repo_id="AlicanKiraz/BaronLLM-70B",
+#     task="text-generation",
+#     max_new_tokens=512,
+#     temperature=0.1,
+# )
+# llm = ChatHuggingFace(llm=endpoint)
 
 # if "ANTHROPIC_API_KEY" not in os.environ:
 #     os.environ["ANTHROPIC_API_KEY"] = getpass.getpass("Enter your Anthropic API key: ")
@@ -58,13 +62,39 @@ llm = ChatOllama(
 #     input_variables=["analyst_goal", "dataset"]
 # )
 main_instruction = PromptTemplate(template="""
-    Answer the user question using the dataset
-    
-    Dataset attack sample: {dataset}
-    
-    If the user asks about the meaning of a feature in the dataset: {feature_list}
+    You are an expert in identifying and classifying malware in RAN datasets.
+
+    Strict grounding rule: only refer to column names, values, and facts that
+    literally appear in the "Dataset attack sample" section below. Never invent
+    or assume the existence of a column, field, or value that is not shown
+    there. If the data needed to answer is not present, say so explicitly
+    instead of guessing.
+
+    Reference rules (use only what is relevant to the question below):
+    - If the question is about the type of malware, map each value to its attack:
+        * 0 -> Constant bitrate traffic
+        * 1 -> Poisson traffic (30 pkt/s of 125 bytes per UE)
+        * 2 -> Poisson traffic (10 pkt/s of 125 bytes per UE)
+    - If the question is about a new attack, refer to the OOD score in the dataset.
+        * If the OOD score is below 0.4, the attack is new (OOD-like).
+        * If the OOD score is over 0.8, the attack is known (ID-like).
+    - If the question is about the meaning of a feature, use this feature list:
+    {feature_list}
+
+    Dataset attack sample (includes precomputed ground-truth facts — use these
+    numbers directly, do not try to count or estimate frequencies yourself
+    from the row sample):
+    {dataset}
+
+    __QUESTION TO ANSWER__
+    {question}
+
+    Answer the question above directly and specifically. Do not restate the rules;
+    apply them to answer only what was asked.
+
+    Answer:
     """,
-    input_variables=["analyst_goal", "feature_list", "dataset"])
+    input_variables=["question", "feature_list", "dataset"])
 
 
 report_prompt = PromptTemplate(
@@ -73,16 +103,16 @@ report_prompt = PromptTemplate(
 
     Strict constraints:
         - Follow the report structure provided. Do not use another one.
-        - Do not speculate beyond the input provided. 
+        - Do not speculate beyond the input provided.
         - After finishing the report, state your confidence level.
-    
+
     __INPUT__
     Analyst agent answer : {main_agent}
     Report template: {report_template}
-    
-    
+
+
     __OUPUT__
-    Structured report in .txt file: 
+    Structured report in .txt file:
     """,
     input_variables=["main_agent", "report_template"]
 )
@@ -98,33 +128,134 @@ class MessageState(TypedDict, total=False):
     report: str
 
 
+def _find_column(columns, keywords):
+    lowered = {c: c.lower() for c in columns}
+    for kw in keywords:
+        for col, low in lowered.items():
+            if kw in low:
+                return col
+    return None
+
+
+ATTACK_LABELS = {
+    0: "Constant bitrate traffic",
+    1: "Poisson traffic (30 pkt/s of 125 bytes per UE)",
+    2: "Poisson traffic (10 pkt/s of 125 bytes per UE)",
+}
+
+
+def _compute_grounding_facts(dataset):
+    facts = []
+
+    attack_col = _find_column(dataset.columns, ["attack", "malware", "label", "class", "type"])
+    if attack_col is not None:
+        counts = dataset[attack_col].value_counts(dropna=False)
+        total = int(counts.sum())
+        lines = [f"Column used for malware type: '{attack_col}'", "Value counts:"]
+        for value, count in counts.items():
+            pct = 100 * count / total
+            label = ATTACK_LABELS.get(value, "unknown/unmapped value")
+            lines.append(f"  - value={value} ({label}): {count} rows ({pct:.1f}%)")
+        most_common_value = counts.idxmax()
+        lines.append(
+            f"Most common value: {most_common_value} "
+            f"-> {ATTACK_LABELS.get(most_common_value, 'unknown/unmapped value')}"
+        )
+        facts.append("\n".join(lines))
+    else:
+        facts.append(
+            "No column matching attack/malware/label/class/type was found; "
+            "cannot compute malware-type frequency."
+        )
+
+    ood_col = _find_column(dataset.columns, ["ood"])
+    if ood_col is not None:
+        ood = dataset[ood_col]
+        below = int((ood < 0.4).sum())
+        above = int((ood > 0.8).sum())
+        facts.append(
+            f"OOD score column: '{ood_col}'. "
+            f"min={ood.min():.3f}, max={ood.max():.3f}, mean={ood.mean():.3f}. "
+            f"Rows with OOD < 0.4 (new/OOD-like): {below}. "
+            f"Rows with OOD > 0.8 (known/ID-like): {above}."
+        )
+
+    return "\n\n".join(facts)
+
+
+_MALWARE_TYPE_QUESTION_RE = re.compile(
+    r"(common|most\s+frequent|which|what)\s+.*(type|kind)s?\s+of\s+malware", re.IGNORECASE
+)
+
+
 def analyst_node(state: MessageState):
     user_goal = state["messages"][-1].content
     print("USER GOAL", user_goal)
-    # feature_list = state.get("feature_list")
+    feature_list = state.get("feature_list", "")
     dataset_csv = state.get("dataset")
 
+    dataset = None
+    grounding_facts = None
     if dataset_csv:
         dataset = pd.read_csv(io.StringIO(dataset_csv))
+        grounding_facts = _compute_grounding_facts(dataset)
         dataset_str = (
             f"Shape: {dataset.shape}\n\n"
             f"Columns: {list(dataset.columns)}\n\n"
-            f"Preview:\n{dataset.to_markdown(index=False)}\n\n"
-            f"Summary stats:\n{dataset.describe().to_markdown()}"
+            f"Precomputed facts (treat these as ground truth, do not recompute or "
+            f"override them from the row sample below):\n{grounding_facts}\n\n"
+            f"Row sample (first 10 rows, for context only):\n"
+            f"{dataset.head(10).to_markdown(index=False)}"
         )
     else:
         dataset_str = "No dataset provided."
 
+    if dataset is not None and _MALWARE_TYPE_QUESTION_RE.search(user_goal):
+        attack_col = _find_column(dataset.columns, ["attack"])
+        if attack_col is not None:
+            counts = dataset[attack_col].value_counts(dropna=False)
+            most_common_value = counts.idxmax()
+            label = ATTACK_LABELS.get(most_common_value, f"unmapped value {most_common_value}")
+            total = int(counts.sum())
+            pct = 100 * counts[most_common_value] / total
+            answer = (
+                f"The most common malware type in the dataset is: {label} "
+                f"(value={most_common_value} in column '{attack_col}'), "
+                f"appearing in {int(counts[most_common_value])} of {total} rows ({pct:.1f}%).\n\n"
+                f"Full breakdown:\n" + "\n".join(
+                    f"  - {ATTACK_LABELS.get(v, f'unmapped value {v}')} (value={v}): "
+                    f"{int(c)} rows ({100 * c / total:.1f}%)"
+                    for v, c in counts.items()
+                )
+            )
+            print("analyst output (deterministic, no LLM call):", repr(answer))
+            return {"messages": [AIMessage(content=answer)]}
+
     analyst_chain = main_instruction | llm | (lambda x: x.content)
+    formatted_prompt = main_instruction.format(
+        question=user_goal, feature_list=feature_list, dataset=dataset_str
+    )
+    print("=== FORMATTED PROMPT SENT TO LLM ===")
+    print(formatted_prompt)
+    print("=== END FORMATTED PROMPT ===")
 
     start = time.time()
     analyst = analyst_chain.invoke({
-        #"analyst_goal": user_goal,
+        "question": user_goal,
         "feature_list": feature_list,
         "dataset": dataset_str,
     })
     print("analyst: ", (time.time() - start) / 60)
     print("analyst output:", repr(analyst))
+    if dataset is not None:
+        real_cols_lower = {c.lower() for c in dataset.columns}
+        mentioned_unknown = [
+            w for w in re.findall(r"[A-Za-z_][A-Za-z0-9_ ]{2,}", analyst)
+            if w.strip().lower() not in real_cols_lower and w.strip().lower() in
+            {"oblivion", "infection", "malware type"}  # extend as needed
+        ]
+        if mentioned_unknown:
+            print("WARNING: model output may reference fabricated fields:", mentioned_unknown)
 
     return {"messages": [AIMessage(content=analyst)]}
 
@@ -173,7 +304,7 @@ def result():
         {
             "messages": [
                 HumanMessage(
-                    content="Are any UEs showing abnormal downlink block error rates?"
+                    content="Are the attacks in the dataset known or new to the system?"
                 )
             ],
             "feature_list": feature_list,
