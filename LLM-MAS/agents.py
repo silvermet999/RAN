@@ -48,19 +48,7 @@ llm = ChatOllama(
 #         - "Are there any timestamps where ta_attach_diverge = 1 outside of known DRX windows?"
 #         - "Which UEs have ul_bler spiking while their dl_bler remains normal?"
 
-# main_instruction = PromptTemplate(template="""
-#     You are an expert in cybersecurity, specifically network intrusion detection. Assist a cybersecurity analyst in identifying network attacks from the dataset provided.
-#
-#     __INPUT__
-#     analyst goal: {analyst_goal}
-#     dataset: {dataset}
-#
-#     __OUTPUT__
-#     Answer:
-#
-#     """,
-#     input_variables=["analyst_goal", "dataset"]
-# )
+
 main_instruction = PromptTemplate(template="""
     You are an expert in identifying and classifying malware in RAN datasets.
 
@@ -96,25 +84,35 @@ main_instruction = PromptTemplate(template="""
     """,
     input_variables=["question", "feature_list", "dataset"])
 
-
 report_prompt = PromptTemplate(
     template="""
-    You are an assistant to the analyst agent. According to the analyst agent's answer, follow the incident template attached to report a structured incident report.
+    You are an assistant to the analyst agent. Using the analyst agent's answer
+    and the precomputed MITRE mapping below, write a structured incident report
+    following the report template provided.
 
     Strict constraints:
         - Follow the report structure provided. Do not use another one.
         - Do not speculate beyond the input provided.
+        - MITRE ATT&CK/FiGHT technique IDs, tactic names, and technique names
+          MUST come only from the "Precomputed MITRE mapping" section below.
+          Do not invent, guess, or recall from memory any technique ID, tactic,
+          or framework name that is not explicitly listed there.
+        - {scope_disclaimer}
         - After finishing the report, state your confidence level.
 
     __INPUT__
-    Analyst agent answer : {main_agent}
+    Analyst agent answer: {main_agent}
+
+    Precomputed MITRE mapping (ground truth — narrate around this, do not
+    contradict or extend it):
+    {mitre_mapping}
+
     Report template: {report_template}
 
-
-    __OUPUT__
-    Structured report in .txt file:
+    __OUTPUT__
+    Structured report:
     """,
-    input_variables=["main_agent", "report_template"]
+    input_variables=["main_agent", "mitre_mapping", "report_template", "scope_disclaimer"]
 )
 
 
@@ -143,11 +141,58 @@ ATTACK_LABELS = {
     2: "Poisson traffic (10 pkt/s of 125 bytes per UE)",
 }
 
+MITRE_TECHNIQUE_MAPPING = {
+    0: {
+        "tactic": "N/A",
+        "technique_id": None,
+        "technique_name": None,
+        "framework": None,
+        "rationale": (
+            "Constant bitrate traffic matches baseline/expected behavior; "
+            "no anomalous pattern to map to a technique."
+        ),
+    },
+    1: {
+        "tactic": "Impact (TA0040)",
+        "technique_id": "T1498",
+        "technique_name": "Network Denial of Service",
+        "framework": "MITRE ATT&CK Enterprise; see also MITRE FiGHT (5G-specific) "
+                     "addendum for RAN/gNB resource exhaustion",
+        "rationale": (
+            "Elevated Poisson-rate traffic (30 pkt/s per UE) is consistent with "
+            "a volumetric flood pattern aimed at exhausting network/RAN "
+            "bandwidth or scheduling resources."
+        ),
+    },
+    2: {
+        "tactic": "Impact (TA0040)",
+        "technique_id": "T1499",
+        "technique_name": "Endpoint Denial of Service",
+        "framework": "MITRE ATT&CK Enterprise; see also MITRE FiGHT (5G-specific) "
+                     "addendum for RAN/gNB resource exhaustion",
+        "rationale": (
+            "Lower-rate but sustained Poisson traffic (10 pkt/s per UE) is "
+            "consistent with resource-exhaustion behavior targeting endpoint "
+            "processing/connection capacity rather than raw bandwidth."
+        ),
+    },
+}
+
+MITRE_SCOPE_DISCLAIMER = (
+    "SCOPE LIMITATION: This dataset contains only per-UE traffic-generation "
+    "pattern labels and an OOD novelty score. It contains no authentication, "
+    "process, payload, or cross-host telemetry. Therefore only the Impact "
+    "tactic (denial-of-service style techniques) can be evidenced from this "
+    "data. Any other MITRE ATT&CK/FiGHT tactic (Initial Access, Persistence, "
+    "Lateral Movement, Credential Access, Exfiltration, Command and Control, "
+    "etc.) CANNOT be assessed from this data and must not be claimed or "
+    "implied in the report."
+)
 
 def _compute_grounding_facts(dataset):
     facts = []
 
-    attack_col = _find_column(dataset.columns, ["attack", "malware", "label", "class", "type"])
+    attack_col = _find_column(dataset.columns, ["attack"])
     if attack_col is not None:
         counts = dataset[attack_col].value_counts(dropna=False)
         total = int(counts.sum())
@@ -186,6 +231,41 @@ def _compute_grounding_facts(dataset):
 _MALWARE_TYPE_QUESTION_RE = re.compile(
     r"(common|most\s+frequent|which|what)\s+.*(type|kind)s?\s+of\s+malware", re.IGNORECASE
 )
+
+
+def _compute_mitre_mapping(dataset: pd.DataFrame):
+    attack_col = _find_column(dataset.columns, ["attack"])
+    if attack_col is None:
+        return (
+            "No attack-type column found in the dataset; no MITRE technique "
+            "mapping can be computed."
+        )
+
+    counts = dataset[attack_col].value_counts(dropna=False)
+    total = int(counts.sum())
+    lines = [f"Attack-type column used: '{attack_col}'", ""]
+    for value, count in counts.items():
+        pct = 100 * count / total
+        mapping = MITRE_TECHNIQUE_MAPPING.get(value)
+        if mapping is None:
+            lines.append(
+                f"- value={value}: {count} rows ({pct:.1f}%) — "
+                f"no MITRE mapping defined for this value; do not invent one."
+            )
+            continue
+        if mapping["technique_id"] is None:
+            lines.append(
+                f"- value={value} ({ATTACK_LABELS.get(value, 'unknown')}): "
+                f"{count} rows ({pct:.1f}%) — {mapping['rationale']}"
+            )
+        else:
+            lines.append(
+                f"- value={value} ({ATTACK_LABELS.get(value, 'unknown')}): "
+                f"{count} rows ({pct:.1f}%) -> {mapping['tactic']}, "
+                f"{mapping['technique_id']} ({mapping['technique_name']}). "
+                f"Framework: {mapping['framework']}. Rationale: {mapping['rationale']}"
+            )
+    return "\n".join(lines)
 
 
 def analyst_node(state: MessageState):
@@ -260,32 +340,61 @@ def analyst_node(state: MessageState):
     return {"messages": [AIMessage(content=analyst)]}
 
 
-# def reporter_node(state: MessageState):
-#     report_template = state.get("report_template")
-#     analyst_output = state["messages"][-1].content
-#
-#     report_chain = report_prompt | llm | (lambda x: x.content)
-#
-#     start = time.time()
-#     reporter = report_chain.invoke({
-#         "main_agent": analyst_output,
-#         "report_template": report_template,
-#     })
-#
-#     print("report: ", (time.time() - start) / 60)
-#     print("reporter output:", repr(reporter))
-#
-#     return {"messages": [AIMessage(content=reporter)]}
+def reporter_node(state: MessageState):
+    report_template = state.get("report_template", "")
+    dataset_csv = state.get("dataset")
+    analyst_output = state["messages"][-1].content
+
+    if dataset_csv:
+        dataset = pd.read_csv(io.StringIO(dataset_csv))
+        mitre_mapping = _compute_mitre_mapping(dataset)
+    else:
+        dataset = None
+        mitre_mapping = "No dataset provided; no MITRE mapping can be computed."
+
+    report_chain = report_prompt | llm | (lambda x: x.content)
+
+    formatted_prompt = report_prompt.format(
+        main_agent=analyst_output,
+        mitre_mapping=mitre_mapping,
+        report_template=report_template,
+        scope_disclaimer=MITRE_SCOPE_DISCLAIMER,
+    )
+    print("=== FORMATTED REPORT PROMPT SENT TO LLM ===")
+    print(formatted_prompt)
+    print("=== END FORMATTED REPORT PROMPT ===")
+
+    start = time.time()
+    reporter = report_chain.invoke({
+        "main_agent": analyst_output,
+        "mitre_mapping": mitre_mapping,
+        "report_template": report_template,
+        "scope_disclaimer": MITRE_SCOPE_DISCLAIMER,
+    })
+
+    print("report: ", (time.time() - start) / 60)
+    print("reporter output:", repr(reporter))
+    allowed_ids = {
+        m["technique_id"] for m in MITRE_TECHNIQUE_MAPPING.values() if m["technique_id"]
+    }
+    mentioned_ids = set(re.findall(r"T\d{4}(?:\.\d{3})?", reporter))
+    unauthorized_ids = mentioned_ids - allowed_ids
+    if unauthorized_ids:
+        print(
+            "WARNING: reporter output references MITRE technique IDs not in "
+            "the precomputed mapping (likely fabricated):", unauthorized_ids
+        )
+
+    return {"messages": [AIMessage(content=reporter)], "report": reporter}
 
 
 def build_agent():
     workflow = StateGraph(MessageState)
     workflow.add_node("analyst", analyst_node)
-    # workflow.add_node("reporter", reporter_node)
+    workflow.add_node("reporter", reporter_node)
     workflow.add_edge(START, "analyst")
-    workflow.add_edge("analyst", END)
-    # workflow.add_edge("analyst", "reporter")
-    # workflow.add_edge("reporter", END)
+    workflow.add_edge("analyst", "reporter")
+    workflow.add_edge("reporter", END)
     return workflow.compile(checkpointer=memory)
 
 
@@ -304,11 +413,11 @@ def result():
         {
             "messages": [
                 HumanMessage(
-                    content="Are the attacks in the dataset known or new to the system?"
+                    content="What type of malware is common in the dataset?"
                 )
             ],
             "feature_list": feature_list,
-            # "report_template": report_template,
+            "report_template": report_template,
             "dataset": dataset_csv,
         },
         config={"configurable": {"thread_id": "session0"}},
