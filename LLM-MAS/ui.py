@@ -13,13 +13,12 @@ def get_agent():
     return build_agent()
 
 
-# if "messages" not in st.session_state:
-#     st.session_state["messages"] = []
 if "agent_state" not in st.session_state:
     st.session_state["agent_state"] = {
         "messages": [],
         "feature_list": None,
-        "report_template": None
+        "report_template": None,
+        "dataset": None
     }
 
 if "last_processed" not in st.session_state:
@@ -40,57 +39,72 @@ def display_chat():
         st.session_state["last_processed"] = len(st.session_state["agent_state"]["messages"])
 
 
-def conversation_function(submitted, user_input):
-    if submitted and user_input:
+def process_input(user_input):
+    with open('/home/silver/PycharmProjects/RAN2/LLM-MAS/feature_definitions.txt', 'r') as f:
+        st.session_state["agent_state"]["feature_list"] = f.read()
 
-        with open('/home/silver/PycharmProjects/RAN2/LLM-MAS/feature_definitions.txt', 'r') as f:
-            st.session_state["agent_state"]["feature_list"] = f.read()
+    with open('/home/silver/PycharmProjects/RAN2/LLM-MAS/report_template.txt', 'r') as f:
+        st.session_state["agent_state"]["report_template"] = f.read()
 
-        with open('/home/silver/PycharmProjects/RAN2/LLM-MAS/report_template.txt', 'r') as f:
-            st.session_state["agent_state"]["report_template"] = f.read()
+    dataset = pd.read_csv("/home/silver/PycharmProjects/RAN2/models/high_conf_attacks.csv")
+    st.session_state["agent_state"]["dataset"] = dataset.to_csv(index=False)
 
-        st.session_state["agent_state"]["messages"].append(HumanMessage(content=user_input))
-        print("ui", st.session_state["agent_state"]["messages"])
+    st.session_state["agent_state"]["messages"].append(HumanMessage(content=user_input))
 
-        display_chat()
+    with st.spinner("Thinking..."):
+        start = time.time()
+        result = get_agent().invoke({"messages": st.session_state["agent_state"]["messages"],
+                                     "feature_list": st.session_state["agent_state"]["feature_list"],
+                                     "report_template": st.session_state["agent_state"]["report_template"],
+                                     "dataset": st.session_state["agent_state"]["dataset"],
+                                     },
+                                    config={"configurable": {"thread_id": "session"}})
+        print("result: ", (time.time() - start) / 60)
 
-        with st.spinner("Thinking..."):
-            start = time.time()
-            result = get_agent().invoke({"messages": st.session_state["agent_state"]["messages"],
-                                         "feature_list": st.session_state["agent_state"]["feature_list"],
-                                         "report_template": st.session_state["agent_state"]["report_template"]
-                                         },
-                                        config={"configurable": {"thread_id": "session"}})
-            print("result: ", (time.time() - start) / 60)
-        latest_msg_ai = result["messages"][-1]
-        if isinstance(latest_msg_ai, AIMessage):
-            st.session_state["agent_state"]["messages"].append(latest_msg_ai)
-            print(st.session_state["agent_state"]["messages"])
-        else:
-            st.session_state["agent_state"]["messages"].append(
-                AIMessage(content="(No response generated for this turn.)")
-            )
+    st.session_state["agent_state"]["messages"] = result["messages"]
+    st.session_state["agent_state"]["report"] = result.get("report")
 
-        display_chat()
 
-        try:
-            report_template = result.get("report_template")
-            if report_template is not None and isinstance(report_template[0], AIMessage):
-                st.session_state["agent_state"]["report_template"] = report_template[0].content
-                with open("final_report.txt", "w", encoding="utf-8") as f:
-                    f.write(st.session_state["agent_state"]["report_template"])
-            else:
-                st.session_state["agent_state"]["report_template"] = None
-        except Exception as e:
-            print("Failed to process report_template:", e)
-
+def render_page():
+    # 1. Chat history first
     display_chat()
 
+    # 2. Proposed report (and Accept/Reject/Download) second
+    report_text = st.session_state["agent_state"].get("report")
+    if report_text is not None:
+        st.subheader("Proposed Report")
+        st.text(report_text)
 
-with st.form("input_form", clear_on_submit=True):
-    user_input = st.text_input("input question")
-    # uploaded_file = st.file_uploader("Ask any question")
-    submitted = st.form_submit_button("Send")
+        col1, col2 = st.columns(2)
 
-if __name__ == "__main__":
-    conversation_function(submitted, user_input)
+        with col1:
+            if st.button("Accept"):
+                st.session_state["approved"] = True
+
+        with col2:
+            if st.button("Reject"):
+                st.session_state["approved"] = False
+
+    if st.session_state.get("approved") is True and report_text is not None:
+        with open("report.txt", "w") as f:
+            f.write(report_text)
+
+        st.success("Report saved!")
+        st.download_button(
+            label="Download report.txt",
+            data=report_text,
+            file_name="report.txt",
+            mime="text/plain",
+        )
+
+    # 3. Input box last, so it always renders below chat + report
+    with st.form("input_form", clear_on_submit=True):
+        user_input = st.text_input("input question")
+        submitted = st.form_submit_button("Send")
+
+    if submitted and user_input:
+        process_input(user_input)
+        st.rerun()
+
+
+render_page()

@@ -1,0 +1,27 @@
+INCIDENT REPORT
+================
+
+1. SUMMARY
+A high volume of Poisson traffic was detected, with 50.0% of the traffic exhibiting a lower rate (10 pkt/s of 125 bytes per UE) and 40.0% exhibiting a higher rate (30 pkt/s of 125 bytes per UE).
+
+2. DETECTED ATTACK TYPE
+- Attack label(s) observed: Unknown
+- Description: Poisson traffic (10 pkt/s of 125 bytes per UE) and Poisson traffic (30 pkt/s of 125 bytes per UE)
+- Prevalence: 5 rows (50.0%) and 4 rows (40.0%), respectively
+
+3. MITRE ATT&CK / FiGHT MAPPING
+- Tactic: Impact
+- Technique ID: T1499 (Endpoint Denial of Service), T1498 (Network Denial of Service)
+- Technique name: Endpoint Denial of Service, Network Denial of Service
+- Rationale: Lower-rate but sustained Poisson traffic is consistent with resource-exhaustion behavior targeting endpoint processing/connection capacity, while elevated Poisson-rate traffic is consistent with a volumetric flood pattern aimed at exhausting network/RAN bandwidth or scheduling resources.
+
+4. SCOPE AND LIMITATIONS
+This dataset contains only per-UE traffic-generation pattern labels and an OOD novelty score, with no authentication, process, payload, or cross-host telemetry. Therefore, only the Impact tactic (denial-of-service style techniques) can be evidenced from this data. Any other MITRE ATT&CK/FiGHT tactic cannot be assessed from this data.
+
+5. RECOMMENDED NEXT STEPS
+- Implement rate limiting on affected endpoints to prevent further resource exhaustion.
+- Collect additional telemetry to monitor network/RAN bandwidth and scheduling resources.
+- Notify the incident response team to assess the impact of the detected traffic patterns.
+
+6. CONFIDENCE LEVEL
+High, as the detected traffic patterns are consistent with known attack patterns and techniques, and the data provides sufficient evidence to support the recommended next steps.

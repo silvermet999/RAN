@@ -15,7 +15,7 @@ from langgraph.graph import START, END, StateGraph, add_messages
 
 import os
 from langchain_anthropic import ChatAnthropic
-from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
+# from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from typing_extensions import Annotated
 
 memory = MemorySaver()
@@ -59,19 +59,17 @@ main_instruction = PromptTemplate(template="""
     instead of guessing.
 
     Reference rules (use only what is relevant to the question below):
-    - If the question is about the type of malware, map each value to its attack:
+    - If the question is about the type of malware, map each value to its attack and return the percentage of each type:
         * 0 -> Constant bitrate traffic
         * 1 -> Poisson traffic (30 pkt/s of 125 bytes per UE)
         * 2 -> Poisson traffic (10 pkt/s of 125 bytes per UE)
-    - If the question is about a new attack, refer to the OOD score in the dataset.
+    - If the question is about a new attack, return the exact OOD score and determine if it is new or known.
         * If the OOD score is below 0.4, the attack is new (OOD-like).
         * If the OOD score is over 0.8, the attack is known (ID-like).
     - If the question is about the meaning of a feature, use this feature list:
     {feature_list}
 
-    Dataset attack sample (includes precomputed ground-truth facts — use these
-    numbers directly, do not try to count or estimate frequencies yourself
-    from the row sample):
+    Dataset attack sample:
     {dataset}
 
     __QUESTION TO ANSWER__
@@ -192,7 +190,7 @@ MITRE_SCOPE_DISCLAIMER = (
 def _compute_grounding_facts(dataset):
     facts = []
 
-    attack_col = _find_column(dataset.columns, ["attack"])
+    attack_col = _find_column(dataset.columns, ["label"])
     if attack_col is not None:
         counts = dataset[attack_col].value_counts(dropna=False)
         total = int(counts.sum())
@@ -234,7 +232,7 @@ _MALWARE_TYPE_QUESTION_RE = re.compile(
 
 
 def _compute_mitre_mapping(dataset: pd.DataFrame):
-    attack_col = _find_column(dataset.columns, ["attack"])
+    attack_col = _find_column(dataset.columns, ["label"])
     if attack_col is None:
         return (
             "No attack-type column found in the dataset; no MITRE technique "
@@ -291,7 +289,7 @@ def analyst_node(state: MessageState):
         dataset_str = "No dataset provided."
 
     if dataset is not None and _MALWARE_TYPE_QUESTION_RE.search(user_goal):
-        attack_col = _find_column(dataset.columns, ["attack"])
+        attack_col = _find_column(dataset.columns, ["label"])
         if attack_col is not None:
             counts = dataset[attack_col].value_counts(dropna=False)
             most_common_value = counts.idxmax()
@@ -315,9 +313,6 @@ def analyst_node(state: MessageState):
     formatted_prompt = main_instruction.format(
         question=user_goal, feature_list=feature_list, dataset=dataset_str
     )
-    print("=== FORMATTED PROMPT SENT TO LLM ===")
-    print(formatted_prompt)
-    print("=== END FORMATTED PROMPT ===")
 
     start = time.time()
     analyst = analyst_chain.invoke({
@@ -345,24 +340,10 @@ def reporter_node(state: MessageState):
     dataset_csv = state.get("dataset")
     analyst_output = state["messages"][-1].content
 
-    if dataset_csv:
-        dataset = pd.read_csv(io.StringIO(dataset_csv))
-        mitre_mapping = _compute_mitre_mapping(dataset)
-    else:
-        dataset = None
-        mitre_mapping = "No dataset provided; no MITRE mapping can be computed."
+    dataset = pd.read_csv(io.StringIO(dataset_csv))
+    mitre_mapping = _compute_mitre_mapping(dataset)
 
     report_chain = report_prompt | llm | (lambda x: x.content)
-
-    formatted_prompt = report_prompt.format(
-        main_agent=analyst_output,
-        mitre_mapping=mitre_mapping,
-        report_template=report_template,
-        scope_disclaimer=MITRE_SCOPE_DISCLAIMER,
-    )
-    print("=== FORMATTED REPORT PROMPT SENT TO LLM ===")
-    print(formatted_prompt)
-    print("=== END FORMATTED REPORT PROMPT ===")
 
     start = time.time()
     reporter = report_chain.invoke({
@@ -385,7 +366,7 @@ def reporter_node(state: MessageState):
             "the precomputed mapping (likely fabricated):", unauthorized_ids
         )
 
-    return {"messages": [AIMessage(content=reporter)], "report": reporter}
+    return {"report": reporter}
 
 
 def build_agent():
@@ -398,36 +379,38 @@ def build_agent():
     return workflow.compile(checkpointer=memory)
 
 
-with open('/home/silver/PycharmProjects/RAN2/LLM-MAS/feature_definitions.txt', 'r') as f:
-    feature_list = f.read()
-
-with open('/home/silver/PycharmProjects/RAN2/LLM-MAS/report_template.txt', 'r') as f:
-    report_template = f.read()
-
-dataset = pd.read_csv("/home/silver/PycharmProjects/RAN2/models/high_conf_attacks.csv")
-dataset_csv = dataset.to_csv(index=False)
-
-agent = build_agent()
-def result():
-    result_proposal = agent.invoke(
-        {
-            "messages": [
-                HumanMessage(
-                    content="What type of malware is common in the dataset?"
-                )
-            ],
-            "feature_list": feature_list,
-            "report_template": report_template,
-            "dataset": dataset_csv,
-        },
-        config={"configurable": {"thread_id": "session0"}},
-    )
-
-    print("\n=== FINAL MESSAGES ===")
-    for message in result_proposal["messages"]:
-        print(type(message).__name__)
-        print(message.content)
-        print()
-
-    return result_proposal
-result()
+# with open('/home/silver/PycharmProjects/RAN2/LLM-MAS/feature_definitions.txt', 'r') as f:
+#     feature_list = f.read()
+#
+# with open('/home/silver/PycharmProjects/RAN2/LLM-MAS/report_template.txt', 'r') as f:
+#     report_template = f.read()
+#
+# dataset = pd.read_csv("/home/silver/PycharmProjects/RAN2/models/high_conf_attacks.csv")
+# dataset_csv = dataset.to_csv(index=False)
+#
+# agent = build_agent()
+# def result():
+#     result_proposal = agent.invoke(
+#         {
+#             "messages": [
+#                 HumanMessage(
+#                     content="What type of attack is common in the dataset?"
+#                 )
+#             ],
+#             "feature_list": feature_list,
+#             "report_template": report_template,
+#             "dataset": dataset_csv,
+#         },
+#         config={"configurable": {"thread_id": "session0"}},
+#     )
+#
+#     print("\n=== FINAL MESSAGES ===")
+#     for message in result_proposal["messages"]:
+#         print(type(message).__name__)
+#         print(message.content)
+#         print()
+#
+#     print(result_proposal["report"])
+#
+#     return result_proposal
+# result()
