@@ -3,19 +3,21 @@ import io
 import json
 import re
 import time
-from typing import List
+from typing import Annotated, Any, Dict, List
 
 import pandas as pd
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_ollama import ChatOllama
+from langchain_core.tools import tool
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.prompts import PromptTemplate
 from typing_extensions import TypedDict
 from langgraph.graph import START, END, StateGraph, add_messages
-
+from langchain_core.runnables import RunnableSequence
+from langgraph.types import CachePolicy
+import getpass
 import os
 from langchain_anthropic import ChatAnthropic
-# from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from typing_extensions import Annotated
 
 memory = MemorySaver()
@@ -24,14 +26,17 @@ llm = ChatOllama(
     model="CyberCrew/notmythos-8b:latest",
     base_url="http://localhost:11434",
     temperature=0.1,
+    # Ollama defaults to a 2048-token context window regardless of what the
+    # underlying model architecture supports, unless this is set explicitly.
+    # Without it, larger prompts (e.g. more dataset rows) get silently
+    # truncated rather than erroring - which looks exactly like hallucination,
+    # since the model may lose either the grounding rules/facts (if truncated
+    # from the front) or the question itself (if truncated from the back).
+    # Check `ollama show CyberCrew/notmythos-8b:latest` for the model's actual
+    # max supported context and set this at or below that ceiling.
+    num_ctx=8192,
 )
-# endpoint = HuggingFaceEndpoint(
-#     repo_id="AlicanKiraz/BaronLLM-70B",
-#     task="text-generation",
-#     max_new_tokens=512,
-#     temperature=0.1,
-# )
-# llm = ChatHuggingFace(llm=endpoint)
+
 
 # if "ANTHROPIC_API_KEY" not in os.environ:
 #     os.environ["ANTHROPIC_API_KEY"] = getpass.getpass("Enter your Anthropic API key: ")
@@ -48,7 +53,19 @@ llm = ChatOllama(
 #         - "Are there any timestamps where ta_attach_diverge = 1 outside of known DRX windows?"
 #         - "Which UEs have ul_bler spiking while their dl_bler remains normal?"
 
-
+# main_instruction = PromptTemplate(template="""
+#     You are an expert in cybersecurity, specifically network intrusion detection. Assist a cybersecurity analyst in identifying network attacks from the dataset provided.
+#
+#     __INPUT__
+#     analyst goal: {analyst_goal}
+#     dataset: {dataset}
+#
+#     __OUTPUT__
+#     Answer:
+#
+#     """,
+#     input_variables=["analyst_goal", "dataset"]
+# )
 main_instruction = PromptTemplate(template="""
     You are an expert in identifying and classifying malware in RAN datasets.
 
@@ -59,17 +76,19 @@ main_instruction = PromptTemplate(template="""
     instead of guessing.
 
     Reference rules (use only what is relevant to the question below):
-    - If the question is about the type of malware, map each value to its attack and return the percentage of each type:
+    - If the question is about the type of malware, map each value to its attack:
         * 0 -> Constant bitrate traffic
         * 1 -> Poisson traffic (30 pkt/s of 125 bytes per UE)
         * 2 -> Poisson traffic (10 pkt/s of 125 bytes per UE)
-    - If the question is about a new attack, return the exact OOD score and determine if it is new or known.
+    - If the question is about a new attack, refer to the OOD score in the dataset.
         * If the OOD score is below 0.4, the attack is new (OOD-like).
         * If the OOD score is over 0.8, the attack is known (ID-like).
     - If the question is about the meaning of a feature, use this feature list:
     {feature_list}
 
-    Dataset attack sample:
+    Dataset attack sample (includes precomputed ground-truth facts — use these
+    numbers directly, do not try to count or estimate frequencies yourself
+    from the row sample):
     {dataset}
 
     __QUESTION TO ANSWER__
@@ -81,6 +100,7 @@ main_instruction = PromptTemplate(template="""
     Answer:
     """,
     input_variables=["question", "feature_list", "dataset"])
+
 
 report_prompt = PromptTemplate(
     template="""
@@ -125,6 +145,7 @@ class MessageState(TypedDict, total=False):
 
 
 def _find_column(columns, keywords):
+    """Best-effort match of a column name against a list of keyword substrings."""
     lowered = {c: c.lower() for c in columns}
     for kw in keywords:
         for col, low in lowered.items():
@@ -139,6 +160,13 @@ ATTACK_LABELS = {
     2: "Poisson traffic (10 pkt/s of 125 bytes per UE)",
 }
 
+# Deterministic mapping from what this dataset can actually evidence
+# (traffic-generation pattern / volumetric behavior) to MITRE techniques.
+# This is intentionally narrow: the dataset has no auth, process, or
+# cross-host telemetry, so it cannot support any tactic other than Impact
+# (denial of service). The LLM must not be allowed to pick technique IDs
+# itself - it has no reliable memorized mapping and will fabricate plausible
+# ones. Extend this table if the dataset gains richer telemetry.
 MITRE_TECHNIQUE_MAPPING = {
     0: {
         "tactic": "N/A",
@@ -155,7 +183,7 @@ MITRE_TECHNIQUE_MAPPING = {
         "technique_id": "T1498",
         "technique_name": "Network Denial of Service",
         "framework": "MITRE ATT&CK Enterprise; see also MITRE FiGHT (5G-specific) "
-                     "addendum for RAN/gNB resource exhaustion",
+                      "addendum for RAN/gNB resource exhaustion",
         "rationale": (
             "Elevated Poisson-rate traffic (30 pkt/s per UE) is consistent with "
             "a volumetric flood pattern aimed at exhausting network/RAN "
@@ -167,7 +195,7 @@ MITRE_TECHNIQUE_MAPPING = {
         "technique_id": "T1499",
         "technique_name": "Endpoint Denial of Service",
         "framework": "MITRE ATT&CK Enterprise; see also MITRE FiGHT (5G-specific) "
-                     "addendum for RAN/gNB resource exhaustion",
+                      "addendum for RAN/gNB resource exhaustion",
         "rationale": (
             "Lower-rate but sustained Poisson traffic (10 pkt/s per UE) is "
             "consistent with resource-exhaustion behavior targeting endpoint "
@@ -187,10 +215,14 @@ MITRE_SCOPE_DISCLAIMER = (
     "implied in the report."
 )
 
-def _compute_grounding_facts(dataset):
+
+def _compute_grounding_facts(dataset: pd.DataFrame) -> str:
+    """Compute exact aggregate facts in pandas so the LLM only has to explain
+    them, rather than infer counts/most-common-value from a raw row preview
+    or describe() output (which it cannot reliably do and will hallucinate)."""
     facts = []
 
-    attack_col = _find_column(dataset.columns, ["label"])
+    attack_col = _find_column(dataset.columns, ["attack", "malware", "label", "class", "type"])
     if attack_col is not None:
         counts = dataset[attack_col].value_counts(dropna=False)
         total = int(counts.sum())
@@ -226,13 +258,11 @@ def _compute_grounding_facts(dataset):
     return "\n\n".join(facts)
 
 
-_MALWARE_TYPE_QUESTION_RE = re.compile(
-    r"(common|most\s+frequent|which|what)\s+.*(type|kind)s?\s+of\s+malware", re.IGNORECASE
-)
-
-
-def _compute_mitre_mapping(dataset: pd.DataFrame):
-    attack_col = _find_column(dataset.columns, ["label"])
+def _compute_mitre_mapping(dataset: pd.DataFrame) -> str:
+    """Compute the MITRE ATT&CK/FiGHT technique mapping deterministically from
+    the attack-type value counts, rather than letting the LLM choose technique
+    IDs itself (which it cannot reliably recall and will fabricate)."""
+    attack_col = _find_column(dataset.columns, ["attack", "malware", "label", "class", "type"])
     if attack_col is None:
         return (
             "No attack-type column found in the dataset; no MITRE technique "
@@ -266,6 +296,12 @@ def _compute_mitre_mapping(dataset: pd.DataFrame):
     return "\n".join(lines)
 
 
+
+_MALWARE_TYPE_QUESTION_RE = re.compile(
+    r"(common|most\s+frequent|which|what)\s+.*(type|kind)s?\s+of\s+malware", re.IGNORECASE
+)
+
+
 def analyst_node(state: MessageState):
     user_goal = state["messages"][-1].content
     print("USER GOAL", user_goal)
@@ -288,8 +324,15 @@ def analyst_node(state: MessageState):
     else:
         dataset_str = "No dataset provided."
 
+    # Deterministic short-circuit: for the "what type of malware is common"
+    # question pattern, answer directly from the pandas-computed facts instead
+    # of asking the LLM to summarize/interpret raw rows. Small local models
+    # have shown a tendency to invent plausible-sounding but nonexistent
+    # column names (e.g. "Oblivion", "Malware Type") instead of using the
+    # actual injected data, so for this well-defined question we skip the LLM
+    # entirely and guarantee a grounded answer.
     if dataset is not None and _MALWARE_TYPE_QUESTION_RE.search(user_goal):
-        attack_col = _find_column(dataset.columns, ["label"])
+        attack_col = _find_column(dataset.columns, ["attack", "malware", "label", "class", "type"])
         if attack_col is not None:
             counts = dataset[attack_col].value_counts(dropna=False)
             most_common_value = counts.idxmax()
@@ -310,9 +353,31 @@ def analyst_node(state: MessageState):
             return {"messages": [AIMessage(content=answer)]}
 
     analyst_chain = main_instruction | llm | (lambda x: x.content)
+
+    # Log the exact formatted prompt so it's possible to verify the model is
+    # actually receiving the real dataset facts (vs. a template-substitution
+    # bug producing an empty/garbled prompt, which would also look like
+    # "the model is making things up").
     formatted_prompt = main_instruction.format(
         question=user_goal, feature_list=feature_list, dataset=dataset_str
     )
+    print("=== FORMATTED PROMPT SENT TO LLM ===")
+    print(formatted_prompt)
+    print("=== END FORMATTED PROMPT ===")
+
+    # Rough token estimate (chars/4 is a common approximation for English
+    # text) to flag when the prompt is approaching or exceeding num_ctx.
+    # This is approximate, not exact - if you need precision, tokenize with
+    # the model's actual tokenizer instead.
+    approx_tokens = len(formatted_prompt) // 4
+    configured_ctx = getattr(llm, "num_ctx", None) or 2048
+    if approx_tokens > configured_ctx * 0.8:
+        print(
+            f"WARNING: prompt is ~{approx_tokens} tokens, close to or over "
+            f"num_ctx={configured_ctx}. Ollama will silently truncate context "
+            f"if this is exceeded, which can produce hallucinated output with "
+            f"no error. Consider raising num_ctx or trimming the row sample."
+        )
 
     start = time.time()
     analyst = analyst_chain.invoke({
@@ -322,6 +387,9 @@ def analyst_node(state: MessageState):
     })
     print("analyst: ", (time.time() - start) / 60)
     print("analyst output:", repr(analyst))
+
+    # Sanity check: flag (don't silently trust) any answer that references a
+    # column name not present in the dataset - a strong signal of fabrication.
     if dataset is not None:
         real_cols_lower = {c.lower() for c in dataset.columns}
         mentioned_unknown = [
@@ -340,10 +408,24 @@ def reporter_node(state: MessageState):
     dataset_csv = state.get("dataset")
     analyst_output = state["messages"][-1].content
 
-    dataset = pd.read_csv(io.StringIO(dataset_csv))
-    mitre_mapping = _compute_mitre_mapping(dataset)
+    if dataset_csv:
+        dataset = pd.read_csv(io.StringIO(dataset_csv))
+        mitre_mapping = _compute_mitre_mapping(dataset)
+    else:
+        dataset = None
+        mitre_mapping = "No dataset provided; no MITRE mapping can be computed."
 
     report_chain = report_prompt | llm | (lambda x: x.content)
+
+    formatted_prompt = report_prompt.format(
+        main_agent=analyst_output,
+        mitre_mapping=mitre_mapping,
+        report_template=report_template,
+        scope_disclaimer=MITRE_SCOPE_DISCLAIMER,
+    )
+    print("=== FORMATTED REPORT PROMPT SENT TO LLM ===")
+    print(formatted_prompt)
+    print("=== END FORMATTED REPORT PROMPT ===")
 
     start = time.time()
     reporter = report_chain.invoke({
@@ -355,6 +437,10 @@ def reporter_node(state: MessageState):
 
     print("report: ", (time.time() - start) / 60)
     print("reporter output:", repr(reporter))
+
+    # Sanity check: flag any MITRE technique ID mentioned in the report that
+    # wasn't in the precomputed mapping we supplied - a strong signal the LLM
+    # invented one instead of using the ground truth it was given.
     allowed_ids = {
         m["technique_id"] for m in MITRE_TECHNIQUE_MAPPING.values() if m["technique_id"]
     }
@@ -366,7 +452,7 @@ def reporter_node(state: MessageState):
             "the precomputed mapping (likely fabricated):", unauthorized_ids
         )
 
-    return {"report": reporter}
+    return {"messages": [AIMessage(content=reporter)], "report": reporter}
 
 
 def build_agent():
@@ -394,14 +480,14 @@ def build_agent():
 #         {
 #             "messages": [
 #                 HumanMessage(
-#                     content="What type of attack is common in the dataset?"
+#                     content="What type of malware is common in the dataset?"
 #                 )
 #             ],
 #             "feature_list": feature_list,
 #             "report_template": report_template,
 #             "dataset": dataset_csv,
 #         },
-#         config={"configurable": {"thread_id": "session0"}},
+#         config={"configurable": {"thread_id": "session1"}},
 #     )
 #
 #     print("\n=== FINAL MESSAGES ===")
@@ -409,8 +495,6 @@ def build_agent():
 #         print(type(message).__name__)
 #         print(message.content)
 #         print()
-#
-#     print(result_proposal["report"])
 #
 #     return result_proposal
 # result()
