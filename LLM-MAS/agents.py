@@ -186,8 +186,8 @@ def analyst_node(state: MessageState):
             f"Columns: {list(dataset.columns)}\n\n"
             f"Precomputed facts (treat these as ground truth, do not recompute or "
             f"override them from the row sample below):\n{grounding_facts}\n\n"
-            f"Row sample (first 10 rows, for context only):\n"
-            f"{dataset.head(10).to_markdown(index=False)}"
+            f"Row sample (first 20 rows, for context only):\n"
+            f"{dataset.head(20).to_markdown(index=False)}"
         )
     else:
         dataset_str = "No dataset provided."
@@ -210,7 +210,6 @@ def analyst_node(state: MessageState):
                     for v, c in counts.items()
                 )
             )
-            print("analyst output (deterministic, no LLM call):", repr(answer))
             return {"messages": [AIMessage(content=answer)]}
 
     if dataset is not None and _OOD_QUESTION_RE.search(user_goal):
@@ -243,7 +242,6 @@ def analyst_node(state: MessageState):
                 f"({100 * ambiguous / total:.1f}%)\n\n"
                 f"{verdict}"
             )
-            print("analyst output (deterministic, no LLM call):", repr(answer))
             return {"messages": [AIMessage(content=answer)]}
 
 
@@ -252,9 +250,6 @@ def analyst_node(state: MessageState):
     formatted_prompt = main_instruction.format(
         question=user_goal, feature_list=feature_list, dataset=dataset_str
     )
-    print("=== FORMATTED PROMPT SENT TO LLM ===")
-    print(formatted_prompt)
-    print("=== END FORMATTED PROMPT ===")
 
     approx_tokens = len(formatted_prompt) // 4
     configured_ctx = getattr(llm, "num_ctx", None) or 2048
@@ -303,9 +298,6 @@ def reporter_node(state: MessageState):
         main_agent=analyst_output,
         report_template=report_template,
     )
-    print("=== FORMATTED REPORT PROMPT SENT TO LLM ===")
-    print(formatted_prompt)
-    print("=== END FORMATTED REPORT PROMPT ===")
 
     start = time.time()
     reporter = report_chain.invoke({
@@ -314,7 +306,6 @@ def reporter_node(state: MessageState):
     })
 
     print("report: ", (time.time() - start) / 60)
-    print("reporter output:", repr(reporter))
 
     return {"messages": [AIMessage(content=reporter)], "report": reporter}
 

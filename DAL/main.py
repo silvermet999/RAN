@@ -6,10 +6,7 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import cross_val_score
-
 import prep_OOD
-
-
 import numpy as np
 import sys
 import argparse
@@ -31,7 +28,7 @@ parser = argparse.ArgumentParser()
 # parser.add_argument('src', type=str)
 
 # Optimization options
-parser.add_argument('--epochs', '-e', type=int, default=2, help='Number of epochs to train.')
+parser.add_argument('--epochs', '-e', type=int, default=50, help='Number of epochs to train.')
 parser.add_argument('--learning_rate', '-lr', type=float, default=0.01, help='The initial learning rate.')
 parser.add_argument('--batch_size', '-b', type=int, default=128, help='Batch size.')
 parser.add_argument('--oe_batch_size', type=int, default=256, help='Batch size.')
@@ -425,7 +422,7 @@ if __name__ == "__main__":
 
                 records = []
                 worst_indices, worst_scores, worst_labels = utils.get_worst_attacks(
-                    out_score, fn_indices, test_loader_out.dataset, n=10)
+                    out_score, fn_indices, test_loader_out.dataset, n=100)
 
                 for idx, label, score in zip(worst_indices, worst_labels, worst_scores):
                     records.append({
@@ -440,7 +437,7 @@ if __name__ == "__main__":
 
                 df = pd.DataFrame(records)
                 df.columns = list(df.columns[:3]) + list(prep.X_train_sc.columns)
-                df.to_csv(f"models/high_conf_attacks_2.csv", index=False)
+                df.to_csv(f"high_conf_attacks_2.csv", index=False)
 
             #     mlflow.log_metric("in_score", in_score, step=epoch)
             #
