@@ -8,15 +8,14 @@ from agents import build_agent
 from langchain_core.messages import AIMessage, HumanMessage
 
 
-@st.cache_resource
-def get_agent():
-    return build_agent()
+# @st.cache_resource
+# def get_agent():
+#     return build_agent()
 
 
 if "agent_state" not in st.session_state:
     st.session_state["agent_state"] = {
         "messages": [],
-        "feature_list": None,
         "report_template": None,
         "dataset": None
     }
@@ -40,8 +39,6 @@ def display_chat():
 
 
 def process_input(user_input):
-    with open('/home/silver/PycharmProjects/RAN2/LLM-MAS/feature_definitions.txt', 'r') as f:
-        st.session_state["agent_state"]["feature_list"] = f.read()
 
     with open('/home/silver/PycharmProjects/RAN2/LLM-MAS/report_template.txt', 'r') as f:
         st.session_state["agent_state"]["report_template"] = f.read()
@@ -53,12 +50,11 @@ def process_input(user_input):
 
     with st.spinner("Thinking..."):
         start = time.time()
-        result = get_agent().invoke({"messages": st.session_state["agent_state"]["messages"],
-                                     "feature_list": st.session_state["agent_state"]["feature_list"],
+        result = build_agent().invoke({"messages": st.session_state["agent_state"]["messages"],
                                      "report_template": st.session_state["agent_state"]["report_template"],
                                      "dataset": st.session_state["agent_state"]["dataset"],
                                      },
-                                    config={"configurable": {"thread_id": "session"}})
+                                    config={"configurable": {"thread_id": "session2"}})
         print("result: ", (time.time() - start) / 60)
 
     st.session_state["agent_state"]["messages"] = result["messages"]
@@ -66,13 +62,10 @@ def process_input(user_input):
 
 
 def render_page():
-    # 1. Chat history first
     display_chat()
 
-    # 2. Proposed report (and Accept/Reject/Download) second
     report_text = st.session_state["agent_state"].get("report")
     if report_text is not None:
-        st.subheader("Proposed Report")
         st.text(report_text)
 
         col1, col2 = st.columns(2)
@@ -89,7 +82,6 @@ def render_page():
         with open("report.txt", "w") as f:
             f.write(report_text)
 
-        st.success("Report saved!")
         st.download_button(
             label="Download report.txt",
             data=report_text,
@@ -97,7 +89,6 @@ def render_page():
             mime="text/plain",
         )
 
-    # 3. Input box last, so it always renders below chat + report
     with st.form("input_form", clear_on_submit=True):
         user_input = st.text_input("input question")
         submitted = st.form_submit_button("Send")

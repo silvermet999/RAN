@@ -1,27 +1,28 @@
-INCIDENT REPORT
+ANALYSIS REPORT
 ================
 
 1. SUMMARY
-[One or two sentences describing what was detected, in plain language.]
+[One or two sentences describing what was classified, in plain language.]
 
-2. DETECTED ATTACK TYPE
-- Attack label(s) observed: [from analyst answer]
-- Description: [from ATTACK_LABELS mapping, e.g. "Poisson traffic (30 pkt/s of 125 bytes per UE)"]
+2.1. DETECTED TRAFFIC TYPE
+- TRAFFIC label(s) observed: [from analyst answer]
+- Description: [from TRAFFIC_LABELS mapping, e.g. "Poisson traffic (30 pkt/s of 125 bytes per UE)"]
 - Prevalence: [count / percentage of rows, from analyst answer]
 
-3. MITRE ATT&CK / FiGHT MAPPING
-- Tactic: [from precomputed MITRE mapping — do not alter]
-- Technique ID: [from precomputed MITRE mapping — do not alter]
-- Technique name: [from precomputed MITRE mapping — do not alter]
-- Rationale: [from precomputed MITRE mapping]
+2.2 KNOWN / UNKNOWN STATUS
+- Traffic status observed: [from analyst answer]
+- Description: [when _OOD_QUESTION_RE is satistied e.g. "Unknown"]
+- Prevalence: [average of OOD score across all rows]
 
-4. SCOPE AND LIMITATIONS
-[State plainly what could and could not be assessed from the available data.
-Use the scope disclaimer provided — do not add tactics or techniques beyond it.]
+3. SCOPE AND LIMITATIONS
+[State plainly what could and could not be assessed from the available data.]
 
-5. RECOMMENDED NEXT STEPS
-[2-4 short, concrete actions, e.g. rate-limiting, additional telemetry to collect,
-which team to notify. Keep to actions supported by the findings above.]
+4. RECOMMENDED NEXT STEPS
+[2-4 short, concrete actions, follow this example
+- if class 0 (eMBB) was detected, recommend allocating sufficient throughput/resource blocks and monitor congestion
+- if class 1 (mMTC) was detected, recommend monitoring device density and aggregate traffic; optimize resource efficiency
+- if class 2 (URLLC) was detected, recommend prioritizing latency/reliability; ensure sufficient resources and QoS
+- if unknown status: recommend flagging the sample]
 
-6. CONFIDENCE LEVEL
+5. CONFIDENCE LEVEL
 [High / Medium / Low, with one sentence explaining why.]

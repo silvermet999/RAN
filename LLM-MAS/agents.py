@@ -26,14 +26,6 @@ llm = ChatOllama(
     model="CyberCrew/notmythos-8b:latest",
     base_url="http://localhost:11434",
     temperature=0.1,
-    # Ollama defaults to a 2048-token context window regardless of what the
-    # underlying model architecture supports, unless this is set explicitly.
-    # Without it, larger prompts (e.g. more dataset rows) get silently
-    # truncated rather than erroring - which looks exactly like hallucination,
-    # since the model may lose either the grounding rules/facts (if truncated
-    # from the front) or the question itself (if truncated from the back).
-    # Check `ollama show CyberCrew/notmythos-8b:latest` for the model's actual
-    # max supported context and set this at or below that ceiling.
     num_ctx=8192,
 )
 
@@ -45,48 +37,26 @@ llm = ChatOllama(
 # llm_claude = ChatAnthropic(model="claude-haiku-4-5-20251001")
 
 
-# Answer the following questions to determine if there is an attack:
-#         - "Are there any UEs showing abnormal downlink block error rates right now?"
-#         - "Which base stations have the largest gap between requested and granted PRBs?"
-#         - "Are there any UEs whose ul_ta value changed without a corresponding handover event?"
-#         - "Which slices are experiencing buffer bloat across multiple UEs simultaneously?"
-#         - "Are there any timestamps where ta_attach_diverge = 1 outside of known DRX windows?"
-#         - "Which UEs have ul_bler spiking while their dl_bler remains normal?"
 
-# main_instruction = PromptTemplate(template="""
-#     You are an expert in cybersecurity, specifically network intrusion detection. Assist a cybersecurity analyst in identifying network attacks from the dataset provided.
-#
-#     __INPUT__
-#     analyst goal: {analyst_goal}
-#     dataset: {dataset}
-#
-#     __OUTPUT__
-#     Answer:
-#
-#     """,
-#     input_variables=["analyst_goal", "dataset"]
-# )
 main_instruction = PromptTemplate(template="""
-    You are an expert in identifying and classifying malware in RAN datasets.
+    You are an expert in identifying and classifying traffic in RAN datasets.
 
     Strict grounding rule: only refer to column names, values, and facts that
-    literally appear in the "Dataset attack sample" section below. Never invent
+    literally appear in the "Dataset traffic sample" section below. Never invent
     or assume the existence of a column, field, or value that is not shown
     there. If the data needed to answer is not present, say so explicitly
     instead of guessing.
 
     Reference rules (use only what is relevant to the question below):
-    - If the question is about the type of malware, map each value to its attack:
+    - If the question is about the type of traffic, map each value to its attack:
         * 0 -> Constant bitrate traffic
         * 1 -> Poisson traffic (30 pkt/s of 125 bytes per UE)
         * 2 -> Poisson traffic (10 pkt/s of 125 bytes per UE)
-    - If the question is about a new attack, refer to the OOD score in the dataset.
+    - If the question is about a new traffic pattern, refer to the OOD score in the dataset.
         * If the OOD score is below 0.4, the attack is new (OOD-like).
         * If the OOD score is over 0.8, the attack is known (ID-like).
-    - If the question is about the meaning of a feature, use this feature list:
-    {feature_list}
 
-    Dataset attack sample (includes precomputed ground-truth facts — use these
+    Dataset traffic sample (includes precomputed ground-truth facts — use these
     numbers directly, do not try to count or estimate frequencies yourself
     from the row sample):
     {dataset}
@@ -99,38 +69,29 @@ main_instruction = PromptTemplate(template="""
 
     Answer:
     """,
-    input_variables=["question", "feature_list", "dataset"])
+    input_variables=["question", "dataset"])
 
 
 report_prompt = PromptTemplate(
     template="""
-    You are an assistant to the analyst agent. Using the analyst agent's answer
-    and the precomputed MITRE mapping below, write a structured incident report
+    You are an assistant to the analyst agent. Using the analyst agent's answer, 
+    write a structured report
     following the report template provided.
 
     Strict constraints:
         - Follow the report structure provided. Do not use another one.
         - Do not speculate beyond the input provided.
-        - MITRE ATT&CK/FiGHT technique IDs, tactic names, and technique names
-          MUST come only from the "Precomputed MITRE mapping" section below.
-          Do not invent, guess, or recall from memory any technique ID, tactic,
-          or framework name that is not explicitly listed there.
-        - {scope_disclaimer}
         - After finishing the report, state your confidence level.
 
     __INPUT__
     Analyst agent answer: {main_agent}
-
-    Precomputed MITRE mapping (ground truth — narrate around this, do not
-    contradict or extend it):
-    {mitre_mapping}
 
     Report template: {report_template}
 
     __OUTPUT__
     Structured report:
     """,
-    input_variables=["main_agent", "mitre_mapping", "report_template", "scope_disclaimer"]
+    input_variables=["main_agent", "report_template"]
 )
 
 
@@ -145,7 +106,6 @@ class MessageState(TypedDict, total=False):
 
 
 def _find_column(columns, keywords):
-    """Best-effort match of a column name against a list of keyword substrings."""
     lowered = {c: c.lower() for c in columns}
     for kw in keywords:
         for col, low in lowered.items():
@@ -154,96 +114,39 @@ def _find_column(columns, keywords):
     return None
 
 
-ATTACK_LABELS = {
-    0: "Constant bitrate traffic",
-    1: "Poisson traffic (30 pkt/s of 125 bytes per UE)",
-    2: "Poisson traffic (10 pkt/s of 125 bytes per UE)",
+TRAFFIC_LABELS = {
+    0: "eMBB: Constant bitrate traffic",
+    1: "mMTC: Poisson traffic (30 pkt/s of 125 bytes per UE)",
+    2: "URLLC: Poisson traffic (10 pkt/s of 125 bytes per UE)",
 }
 
-# Deterministic mapping from what this dataset can actually evidence
-# (traffic-generation pattern / volumetric behavior) to MITRE techniques.
-# This is intentionally narrow: the dataset has no auth, process, or
-# cross-host telemetry, so it cannot support any tactic other than Impact
-# (denial of service). The LLM must not be allowed to pick technique IDs
-# itself - it has no reliable memorized mapping and will fabricate plausible
-# ones. Extend this table if the dataset gains richer telemetry.
-MITRE_TECHNIQUE_MAPPING = {
-    0: {
-        "tactic": "N/A",
-        "technique_id": None,
-        "technique_name": None,
-        "framework": None,
-        "rationale": (
-            "Constant bitrate traffic matches baseline/expected behavior; "
-            "no anomalous pattern to map to a technique."
-        ),
-    },
-    1: {
-        "tactic": "Impact (TA0040)",
-        "technique_id": "T1498",
-        "technique_name": "Network Denial of Service",
-        "framework": "MITRE ATT&CK Enterprise; see also MITRE FiGHT (5G-specific) "
-                      "addendum for RAN/gNB resource exhaustion",
-        "rationale": (
-            "Elevated Poisson-rate traffic (30 pkt/s per UE) is consistent with "
-            "a volumetric flood pattern aimed at exhausting network/RAN "
-            "bandwidth or scheduling resources."
-        ),
-    },
-    2: {
-        "tactic": "Impact (TA0040)",
-        "technique_id": "T1499",
-        "technique_name": "Endpoint Denial of Service",
-        "framework": "MITRE ATT&CK Enterprise; see also MITRE FiGHT (5G-specific) "
-                      "addendum for RAN/gNB resource exhaustion",
-        "rationale": (
-            "Lower-rate but sustained Poisson traffic (10 pkt/s per UE) is "
-            "consistent with resource-exhaustion behavior targeting endpoint "
-            "processing/connection capacity rather than raw bandwidth."
-        ),
-    },
-}
-
-MITRE_SCOPE_DISCLAIMER = (
-    "SCOPE LIMITATION: This dataset contains only per-UE traffic-generation "
-    "pattern labels and an OOD novelty score. It contains no authentication, "
-    "process, payload, or cross-host telemetry. Therefore only the Impact "
-    "tactic (denial-of-service style techniques) can be evidenced from this "
-    "data. Any other MITRE ATT&CK/FiGHT tactic (Initial Access, Persistence, "
-    "Lateral Movement, Credential Access, Exfiltration, Command and Control, "
-    "etc.) CANNOT be assessed from this data and must not be claimed or "
-    "implied in the report."
-)
 
 
 def _compute_grounding_facts(dataset: pd.DataFrame) -> str:
-    """Compute exact aggregate facts in pandas so the LLM only has to explain
-    them, rather than infer counts/most-common-value from a raw row preview
-    or describe() output (which it cannot reliably do and will hallucinate)."""
     facts = []
 
-    attack_col = _find_column(dataset.columns, ["attack", "malware", "label", "class", "type"])
-    if attack_col is not None:
-        counts = dataset[attack_col].value_counts(dropna=False)
+    traffic_col = _find_column(dataset.columns, ["label"])
+    if traffic_col is not None:
+        counts = dataset[traffic_col].value_counts(dropna=False)
         total = int(counts.sum())
-        lines = [f"Column used for malware type: '{attack_col}'", "Value counts:"]
+        lines = [f"Column used for traffic type: '{traffic_col}'", "Value counts:"]
         for value, count in counts.items():
             pct = 100 * count / total
-            label = ATTACK_LABELS.get(value, "unknown/unmapped value")
+            label = TRAFFIC_LABELS.get(value, "unknown/unmapped value")
             lines.append(f"  - value={value} ({label}): {count} rows ({pct:.1f}%)")
         most_common_value = counts.idxmax()
         lines.append(
             f"Most common value: {most_common_value} "
-            f"-> {ATTACK_LABELS.get(most_common_value, 'unknown/unmapped value')}"
+            f"-> {TRAFFIC_LABELS.get(most_common_value, 'unknown/unmapped value')}"
         )
         facts.append("\n".join(lines))
     else:
         facts.append(
-            "No column matching attack/malware/label/class/type was found; "
+            "No column matching label was found; "
             "cannot compute malware-type frequency."
         )
 
-    ood_col = _find_column(dataset.columns, ["ood"])
+    ood_col = _find_column(dataset.columns, ["ood_score"])
     if ood_col is not None:
         ood = dataset[ood_col]
         below = int((ood < 0.4).sum())
@@ -258,47 +161,12 @@ def _compute_grounding_facts(dataset: pd.DataFrame) -> str:
     return "\n\n".join(facts)
 
 
-def _compute_mitre_mapping(dataset: pd.DataFrame) -> str:
-    """Compute the MITRE ATT&CK/FiGHT technique mapping deterministically from
-    the attack-type value counts, rather than letting the LLM choose technique
-    IDs itself (which it cannot reliably recall and will fabricate)."""
-    attack_col = _find_column(dataset.columns, ["attack", "malware", "label", "class", "type"])
-    if attack_col is None:
-        return (
-            "No attack-type column found in the dataset; no MITRE technique "
-            "mapping can be computed."
-        )
+_TRAFFIC_TYPE_QUESTION_RE = re.compile(
+    r"(common|most\s+frequent|which|what)\s+.*(type|kind)s?\s+of\s+(traffic|attack)", re.IGNORECASE
+)
 
-    counts = dataset[attack_col].value_counts(dropna=False)
-    total = int(counts.sum())
-    lines = [f"Attack-type column used: '{attack_col}'", ""]
-    for value, count in counts.items():
-        pct = 100 * count / total
-        mapping = MITRE_TECHNIQUE_MAPPING.get(value)
-        if mapping is None:
-            lines.append(
-                f"- value={value}: {count} rows ({pct:.1f}%) — "
-                f"no MITRE mapping defined for this value; do not invent one."
-            )
-            continue
-        if mapping["technique_id"] is None:
-            lines.append(
-                f"- value={value} ({ATTACK_LABELS.get(value, 'unknown')}): "
-                f"{count} rows ({pct:.1f}%) — {mapping['rationale']}"
-            )
-        else:
-            lines.append(
-                f"- value={value} ({ATTACK_LABELS.get(value, 'unknown')}): "
-                f"{count} rows ({pct:.1f}%) -> {mapping['tactic']}, "
-                f"{mapping['technique_id']} ({mapping['technique_name']}). "
-                f"Framework: {mapping['framework']}. Rationale: {mapping['rationale']}"
-            )
-    return "\n".join(lines)
-
-
-
-_MALWARE_TYPE_QUESTION_RE = re.compile(
-    r"(common|most\s+frequent|which|what)\s+.*(type|kind)s?\s+of\s+malware", re.IGNORECASE
+_OOD_QUESTION_RE = re.compile(
+    r"(known|novel|new|unknown|ood|out.of.distribution|id.like|ood.like)", re.IGNORECASE
 )
 
 
@@ -324,27 +192,20 @@ def analyst_node(state: MessageState):
     else:
         dataset_str = "No dataset provided."
 
-    # Deterministic short-circuit: for the "what type of malware is common"
-    # question pattern, answer directly from the pandas-computed facts instead
-    # of asking the LLM to summarize/interpret raw rows. Small local models
-    # have shown a tendency to invent plausible-sounding but nonexistent
-    # column names (e.g. "Oblivion", "Malware Type") instead of using the
-    # actual injected data, so for this well-defined question we skip the LLM
-    # entirely and guarantee a grounded answer.
-    if dataset is not None and _MALWARE_TYPE_QUESTION_RE.search(user_goal):
-        attack_col = _find_column(dataset.columns, ["attack", "malware", "label", "class", "type"])
-        if attack_col is not None:
-            counts = dataset[attack_col].value_counts(dropna=False)
+    if dataset is not None and _TRAFFIC_TYPE_QUESTION_RE.search(user_goal):
+        traffic_col = _find_column(dataset.columns, ["label"])
+        if traffic_col is not None:
+            counts = dataset[traffic_col].value_counts(dropna=False)
             most_common_value = counts.idxmax()
-            label = ATTACK_LABELS.get(most_common_value, f"unmapped value {most_common_value}")
+            label = TRAFFIC_LABELS.get(most_common_value, f"unmapped value {most_common_value}")
             total = int(counts.sum())
             pct = 100 * counts[most_common_value] / total
             answer = (
-                f"The most common malware type in the dataset is: {label} "
-                f"(value={most_common_value} in column '{attack_col}'), "
+                f"The most common traffic type in the dataset is: {label} "
+                f"(value={most_common_value} in column '{traffic_col}'), "
                 f"appearing in {int(counts[most_common_value])} of {total} rows ({pct:.1f}%).\n\n"
                 f"Full breakdown:\n" + "\n".join(
-                    f"  - {ATTACK_LABELS.get(v, f'unmapped value {v}')} (value={v}): "
+                    f"  - {TRAFFIC_LABELS.get(v, f'unmapped value {v}')} (value={v}): "
                     f"{int(c)} rows ({100 * c / total:.1f}%)"
                     for v, c in counts.items()
                 )
@@ -352,12 +213,42 @@ def analyst_node(state: MessageState):
             print("analyst output (deterministic, no LLM call):", repr(answer))
             return {"messages": [AIMessage(content=answer)]}
 
+    if dataset is not None and _OOD_QUESTION_RE.search(user_goal):
+        ood_col = _find_column(dataset.columns, ["ood_score"])
+        if ood_col is not None:
+            ood = dataset[ood_col]
+            total = int(ood.shape[0])
+            below = int((ood < 0.4).sum())
+            above = int((ood > 0.8).sum())
+            ambiguous = total - below - above
+
+            mean_score = float(ood.mean())
+            if below > above and below > ambiguous:
+                verdict = "The dataset is dominated by OOD-like (novel/unknown) samples."
+            elif above > below and above > ambiguous:
+                verdict = "The dataset is dominated by ID-like (known) samples."
+            else:
+                verdict = (
+                    "The dataset does not have a single dominant category; scores are "
+                    "mixed across OOD-like, ID-like, and ambiguous ranges."
+                )
+
+            answer = (
+                f"OOD score column used: '{ood_col}'. Mean OOD score: {mean_score:.3f}.\n\n"
+                f"- OOD-like (score < 0.4, novel/unknown attack): {below} of {total} rows "
+                f"({100 * below / total:.1f}%)\n"
+                f"- ID-like (score > 0.8, known attack): {above} of {total} rows "
+                f"({100 * above / total:.1f}%)\n"
+                f"- Ambiguous (0.4 <= score <= 0.8, no confident call): {ambiguous} of {total} rows "
+                f"({100 * ambiguous / total:.1f}%)\n\n"
+                f"{verdict}"
+            )
+            print("analyst output (deterministic, no LLM call):", repr(answer))
+            return {"messages": [AIMessage(content=answer)]}
+
+
     analyst_chain = main_instruction | llm | (lambda x: x.content)
 
-    # Log the exact formatted prompt so it's possible to verify the model is
-    # actually receiving the real dataset facts (vs. a template-substitution
-    # bug producing an empty/garbled prompt, which would also look like
-    # "the model is making things up").
     formatted_prompt = main_instruction.format(
         question=user_goal, feature_list=feature_list, dataset=dataset_str
     )
@@ -365,10 +256,6 @@ def analyst_node(state: MessageState):
     print(formatted_prompt)
     print("=== END FORMATTED PROMPT ===")
 
-    # Rough token estimate (chars/4 is a common approximation for English
-    # text) to flag when the prompt is approaching or exceeding num_ctx.
-    # This is approximate, not exact - if you need precision, tokenize with
-    # the model's actual tokenizer instead.
     approx_tokens = len(formatted_prompt) // 4
     configured_ctx = getattr(llm, "num_ctx", None) or 2048
     if approx_tokens > configured_ctx * 0.8:
@@ -382,20 +269,17 @@ def analyst_node(state: MessageState):
     start = time.time()
     analyst = analyst_chain.invoke({
         "question": user_goal,
-        "feature_list": feature_list,
         "dataset": dataset_str,
     })
     print("analyst: ", (time.time() - start) / 60)
     print("analyst output:", repr(analyst))
 
-    # Sanity check: flag (don't silently trust) any answer that references a
-    # column name not present in the dataset - a strong signal of fabrication.
     if dataset is not None:
         real_cols_lower = {c.lower() for c in dataset.columns}
         mentioned_unknown = [
             w for w in re.findall(r"[A-Za-z_][A-Za-z0-9_ ]{2,}", analyst)
             if w.strip().lower() not in real_cols_lower and w.strip().lower() in
-            {"oblivion", "infection", "malware type"}  # extend as needed
+            {"anomaly", "abnormal"}
         ]
         if mentioned_unknown:
             print("WARNING: model output may reference fabricated fields:", mentioned_unknown)
@@ -410,18 +294,14 @@ def reporter_node(state: MessageState):
 
     if dataset_csv:
         dataset = pd.read_csv(io.StringIO(dataset_csv))
-        mitre_mapping = _compute_mitre_mapping(dataset)
     else:
         dataset = None
-        mitre_mapping = "No dataset provided; no MITRE mapping can be computed."
 
     report_chain = report_prompt | llm | (lambda x: x.content)
 
     formatted_prompt = report_prompt.format(
         main_agent=analyst_output,
-        mitre_mapping=mitre_mapping,
         report_template=report_template,
-        scope_disclaimer=MITRE_SCOPE_DISCLAIMER,
     )
     print("=== FORMATTED REPORT PROMPT SENT TO LLM ===")
     print(formatted_prompt)
@@ -430,27 +310,11 @@ def reporter_node(state: MessageState):
     start = time.time()
     reporter = report_chain.invoke({
         "main_agent": analyst_output,
-        "mitre_mapping": mitre_mapping,
         "report_template": report_template,
-        "scope_disclaimer": MITRE_SCOPE_DISCLAIMER,
     })
 
     print("report: ", (time.time() - start) / 60)
     print("reporter output:", repr(reporter))
-
-    # Sanity check: flag any MITRE technique ID mentioned in the report that
-    # wasn't in the precomputed mapping we supplied - a strong signal the LLM
-    # invented one instead of using the ground truth it was given.
-    allowed_ids = {
-        m["technique_id"] for m in MITRE_TECHNIQUE_MAPPING.values() if m["technique_id"]
-    }
-    mentioned_ids = set(re.findall(r"T\d{4}(?:\.\d{3})?", reporter))
-    unauthorized_ids = mentioned_ids - allowed_ids
-    if unauthorized_ids:
-        print(
-            "WARNING: reporter output references MITRE technique IDs not in "
-            "the precomputed mapping (likely fabricated):", unauthorized_ids
-        )
 
     return {"messages": [AIMessage(content=reporter)], "report": reporter}
 
@@ -480,7 +344,7 @@ def build_agent():
 #         {
 #             "messages": [
 #                 HumanMessage(
-#                     content="What type of malware is common in the dataset?"
+#                     content="What type of traffic is common in the dataset?"
 #                 )
 #             ],
 #             "feature_list": feature_list,
