@@ -1,26 +1,19 @@
 import os
-
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 os.environ['TORCH_USE_CUDA_DSA'] = "1"
-import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import confusion_matrix
-from sklearn.model_selection import cross_val_score
-import prep_OOD
+from sklearn.metrics import confusion_matrix, precision_score, recall_score
 import numpy as np
 import sys
 import argparse
 import torch
 import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
-from DAL_archi import WideResNet
 from utils import utils
-import prep
+from DAL import prep, prep_OOD
 from utils.display_results import get_measures, print_measures
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.decomposition import PCA
-
+from DAL_archi import WideResNet
 # IF CUDA RELATED PROBLEMS
 # sudo rmmod nvidia_uvm
 # sudo modprobe nvidia_uvm
@@ -40,12 +33,12 @@ parser.add_argument('--layers', default=58, type=int, help='total number of laye
 parser.add_argument('--widen-factor', default=10, type=int, help='widen factor')
 parser.add_argument('--droprate', default=0.3, type=float, help='dropout probability')
 # DAL hyper parameters
-parser.add_argument('--gamma', default=1, type=float) # increase: higher prevention of large shifts // tradeoff: too restricted, no robustness
-parser.add_argument('--beta',  default=0.5, type=float) # higher separation between ID and OOD // forgetting primary target
-parser.add_argument('--rho',   default=0.01, type=float) # higher size of OOD space // OOD overlap with ID
-parser.add_argument('--strength', default=0.01, type=float) # pushes OOD torwards worst case boundary // exploding gradients, overshoot the boundary space
+parser.add_argument('--gamma', default=0, type=float) # increase: higher prevention of large shifts // tradeoff: too restricted, no robustness
+parser.add_argument('--beta',  default=0, type=float) # higher separation between ID and OOD // forgetting primary target
+parser.add_argument('--rho',   default=0, type=float) # higher size of OOD space // OOD overlap with ID
+parser.add_argument('--strength', default=0, type=float) # pushes OOD torwards worst case boundary // exploding gradients, overshoot the boundary space
 parser.add_argument('--warmup', type=int, default=0) # time to form class clusters and learn representation before OOD // leaves fewer epochs to learn OOD
-parser.add_argument('--iter', default=10, type=int) # time to find worst case point within purturbation // computational runtime
+parser.add_argument('--iter', default=0, type=int) # time to find worst case point within purturbation // computational runtime
 # Others
 parser.add_argument('--out_as_pos', action='store_true', help='OE define OOD data as positive.')
 parser.add_argument('--seed', type=int, default=1)
@@ -77,21 +70,6 @@ expected_ap = ood_num_examples / (ood_num_examples + len(prep.X_test_sc))
 concat = lambda x: np.concatenate(x, axis=0)
 to_np = lambda x: x.data.cpu().numpy()
 
-# def get_ood_scores(loader, in_dist=False):
-#     _score = []
-#     net.eval()
-#     with torch.no_grad():
-#         for batch_idx, (data, target) in enumerate(loader):
-#             if batch_idx >= ood_num_examples // args.test_bs and in_dist is False:
-#                 break
-#             data, target = data.to(torch.float).cuda(), target.cuda()
-#             output = net(data)
-#             smax = to_np(F.softmax(output, dim=1))
-#             _score.append(-np.max(smax, axis=1))
-#     if in_dist:
-#         return concat(_score).copy() # , concat(_right_score).copy(), concat(_wrong_score).copy()
-#     else:
-#         return concat(_score)[:ood_num_examples].copy()
 
 def get_ood_scores_with_indices(loader):
     scores = []
@@ -227,8 +205,8 @@ def train(epoch, gamma, debug_hooks=None):
             emb_bias = emb_bias.detach() + args.strength * grads.detach()
             optimizer.zero_grad()
 
-        gamma -= args.beta * (args.rho - r_sur.detach())
-        gamma = gamma.clamp(min=0.0, max=args.gamma)
+        # gamma -= args.beta * (args.rho - r_sur.detach())
+        # gamma = gamma.clamp(min=0.0, max=args.gamma)
         if epoch >= args.warmup:
             x_oe = net.fc_out(emb[len(in_set[0]):] + emb_bias)
         else:
@@ -274,17 +252,18 @@ def train(epoch, gamma, debug_hooks=None):
 
     return gamma, loss_avg, ce_avg, oe_avg
 
-# def test():
-#     net.eval()
-#     correct = 0
-#     y, c = [], []
-#     with torch.no_grad():
-#         for data, target in test_loader_in:
-#             data, target = data.cuda(), target.cuda()
-#             output = net(data)
-#             pred = output.data.max(1)[1]
-#             correct += pred.eq(target.data).sum().item()
-#     return correct / len(test_loader_in.dataset) * 100
+
+def test():
+    net.eval()
+    correct = 0
+    y, c = [], []
+    with torch.no_grad():
+        for data, target in test_loader_in:
+            data, target = data.cuda(), target.cuda()
+            output = net(data)
+            pred = output.data.max(1)[1]
+            correct += pred.eq(target.data).sum().item()
+    return correct / len(test_loader_in.dataset) * 100
 
 
 num_classes = 3
@@ -309,76 +288,28 @@ optimizer = torch.optim.SGD(net.parameters(), args.learning_rate, momentum=args.
 def cosine_annealing(step, total_steps, lr_max, lr_min):
     return lr_min + (lr_max - lr_min) * 0.5 * (1 + np.cos(step / total_steps * np.pi))
 scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda step: cosine_annealing(step, args.epochs * len(train_loader_in), 1, 1e-6 / args.learning_rate))
-# if args.src:
-#     model_path = './models/wrn_pretrained_epoch_99.pt'
-#     net.load_state_dict(torch.load(model_path))
-# else:
-#     pass
+
 
 def test():
-    net.load_state_dict(torch.load("/home/silver/PycharmProjects/RAN2/models/wr0.0525528912927857.pt"))
+    net.load_state_dict(torch.load("/home/silver/PycharmProjects/RAN2/models/wr0.08049166758849163.pt"))
     net.eval()
     correct = 0
-    y, c = [], []
+    y_true, y_pred = [], []
     with torch.no_grad():
         for data, target in test_loader_in:
             data, target = data.to(torch.float).cuda(), target.cuda()
             output = net(data)
             pred = output.data.max(1)[1]
             correct += pred.eq(target.data).sum().item()
-    return correct / len(test_loader_in.dataset) * 100
-# 98.51
+            y_true.extend(target.cpu().numpy())
+            y_pred.extend(pred.cpu().numpy())
 
-def plots():
-    in_batch, _ = next(iter(train_loader_in))
-    out_batch, _ = next(iter(train_loader_out))
+    accuracy = correct / len(test_loader_in.dataset) * 100
+    precision = precision_score(y_true, y_pred, average='macro', zero_division=0)
+    recall = recall_score(y_true, y_pred, average='macro', zero_division=0)
 
-    in_batch = in_batch.numpy()
-    out_batch = out_batch.numpy()
-
-    print("ID shape:", in_batch.shape, " OOD shape:", out_batch.shape)
-
-    X = np.vstack([in_batch, out_batch])
-    y = np.concatenate([np.zeros(len(in_batch)), np.ones(len(out_batch))])
-
-    clf = RandomForestClassifier(n_estimators=200, max_depth=6)
-    scores = cross_val_score(clf, X, y, cv=3, scoring='roc_auc')
-    print(f"ID vs OOD separability (AUROC): {scores.mean():.3f}")
-    combined = np.vstack([in_batch, out_batch])
-    pca = PCA(n_components=2)
-    proj = pca.fit_transform(combined)
-
-    n_in = len(in_batch)
-    plt.figure(figsize=(6, 6))
-    plt.scatter(proj[:n_in, 0], proj[:n_in, 1], alpha=0.5, label='ID (train_loader_in)', s=10)
-    plt.scatter(proj[n_in:, 0], proj[n_in:, 1], alpha=0.5, label='OOD (train_loader_out)', s=10)
-    plt.legend()
-    plt.title('PCA projection: ID vs OOD')
-    plt.xlabel('PC1')
-    plt.ylabel('PC2')
-    plt.savefig("orginal_OOD.png")
-    num_features_to_plot = min(6, in_batch.shape[1])
-    fig, axes = plt.subplots(2, 3, figsize=(15, 8))
-    axes = axes.flatten()
-
-    for i in range(num_features_to_plot):
-        axes[i].hist(in_batch[:, i], bins=30, alpha=0.5, label='ID', density=True)
-        axes[i].hist(out_batch[:, i], bins=30, alpha=0.5, label='OOD', density=True)
-        axes[i].set_title(f'Feature {i}')
-        axes[i].legend()
-
-    plt.tight_layout()
-    plt.savefig("original_OOD_hist.png")
-
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-    sns.heatmap(np.corrcoef(in_batch.T), ax=axes[0], cmap='coolwarm', center=0, vmin=-1, vmax=1)
-    axes[0].set_title('ID correlation matrix')
-    sns.heatmap(np.corrcoef(out_batch.T), ax=axes[1], cmap='coolwarm', center=0, vmin=-1, vmax=1)
-    axes[1].set_title('OOD correlation matrix')
-    plt.tight_layout()
-    plt.savefig("original_OOD_corr.png")
-
-
+    return accuracy, precision, recall
+# print(test())
 
 if __name__ == "__main__":
     # process = subprocess.Popen(["mlflow", "server", "--host", "127.0.0.1", "--port", "8080"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -394,9 +325,9 @@ if __name__ == "__main__":
     #                        "oe_batch": args.oe_batch_size})
 
         for epoch in range(args.epochs):
-            gamma, loss_avg, ce_avg, oe_avg = train(epoch, gamma, debug_hooks=True)
+            gamma, loss_avg, ce_avg, oe_avg = train(epoch, gamma)
 
-            if epoch % 2 == 0:
+            if epoch % 10 == 9:
                 net.eval()
                 in_score, _ = get_ood_scores_with_indices(test_loader_in)
                 metric_ll = []
@@ -407,37 +338,27 @@ if __name__ == "__main__":
                 )
                 print('\n & %.2f & %.2f & %.2f' % tuple((100 * torch.Tensor(metric_ll).mean(0)).tolist()))
                 print(cm)
-                # print("Threshold:", threshold)
-                # print("Indices:", fn_indices[:20])
-                # false_negatives = prep_OOD.X_test_sc.iloc[fn_indices]
-                # ood_correct = prep_OOD.X_test_sc.drop(prep_OOD.X_test_sc.index[fn_indices])
-                #
-                # print("False negatives:")
-                # print(false_negatives.describe().to_csv("false.csv"))
-                #
-                # print("\nCorrect OOD:")
-                # print(ood_correct.describe().to_csv("correct.csv"))
 
                 torch.save(net.state_dict(), f"wr{ce_avg}.pt")
 
-                records = []
-                worst_indices, worst_scores, worst_labels = utils.get_worst_attacks(
-                    out_score, fn_indices, test_loader_out.dataset, n=100)
-
-                for idx, label, score in zip(worst_indices, worst_labels, worst_scores):
-                    records.append({
-                        'index': int(idx),
-                        'label': int(label),
-                        'ood_score': abs(float(score)),
-                        **{
-                            f'{i}': v
-                            for i, v in enumerate(test_loader_out.dataset[idx][0])
-                        }
-                    })
-
-                df = pd.DataFrame(records)
-                df.columns = list(df.columns[:3]) + list(prep.X_train_sc.columns)
-                df.to_csv(f"high_conf_attacks_2.csv", index=False)
+                # records = []
+                # worst_indices, worst_scores, worst_labels = utils.get_worst_attacks(
+                #     out_score, fn_indices, test_loader_out.dataset, n=100)
+                #
+                # for idx, label, score in zip(worst_indices, worst_labels, worst_scores):
+                #     records.append({
+                #         'index': int(idx),
+                #         'label': int(label),
+                #         'ood_score': abs(float(score)),
+                #         **{
+                #             f'{i}': v
+                #             for i, v in enumerate(test_loader_out.dataset[idx][0])
+                #         }
+                #     })
+                #
+                # df = pd.DataFrame(records)
+                # df.columns = list(df.columns[:3]) + list(prep.X_train_sc.columns)
+                # df.to_csv(f"high_conf_attacks_2.csv", index=False)
 
             #     mlflow.log_metric("in_score", in_score, step=epoch)
             #
@@ -446,27 +367,63 @@ if __name__ == "__main__":
     # #
     # mlflow.pytorch.log_model(net, name="model", serialization_format="pickle")
 
+
+
+
+# def plots():
+#     in_batch, _ = next(iter(train_loader_in))
+#     out_batch, _ = next(iter(train_loader_out))
+#
+#     in_batch = in_batch.numpy()
+#     out_batch = out_batch.numpy()
+#
+#     print("ID shape:", in_batch.shape, " OOD shape:", out_batch.shape)
+#
+#     X = np.vstack([in_batch, out_batch])
+#     y = np.concatenate([np.zeros(len(in_batch)), np.ones(len(out_batch))])
+#
+#     clf = RandomForestClassifier(n_estimators=200, max_depth=6)
+#     scores = cross_val_score(clf, X, y, cv=3, scoring='roc_auc')
+#     print(f"ID vs OOD separability (AUROC): {scores.mean():.3f}")
+#     combined = np.vstack([in_batch, out_batch])
+#     pca = PCA(n_components=2)
+#     proj = pca.fit_transform(combined)
+#
+#     n_in = len(in_batch)
+#     plt.figure(figsize=(6, 6))
+#     plt.scatter(proj[:n_in, 0], proj[:n_in, 1], alpha=0.5, label='ID (train_loader_in)', s=10)
+#     plt.scatter(proj[n_in:, 0], proj[n_in:, 1], alpha=0.5, label='OOD (train_loader_out)', s=10)
+#     plt.legend()
+#     plt.title('PCA projection: ID vs OOD')
+#     plt.xlabel('PC1')
+#     plt.ylabel('PC2')
+#     plt.savefig("orginal_OOD.png")
+#     num_features_to_plot = min(6, in_batch.shape[1])
+#     fig, axes = plt.subplots(2, 3, figsize=(15, 8))
+#     axes = axes.flatten()
+#
+#     for i in range(num_features_to_plot):
+#         axes[i].hist(in_batch[:, i], bins=30, alpha=0.5, label='ID', density=True)
+#         axes[i].hist(out_batch[:, i], bins=30, alpha=0.5, label='OOD', density=True)
+#         axes[i].set_title(f'Feature {i}')
+#         axes[i].legend()
+#
+#     plt.tight_layout()
+#     plt.savefig("original_OOD_hist.png")
+#
+#     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+#     sns.heatmap(np.corrcoef(in_batch.T), ax=axes[0], cmap='coolwarm', center=0, vmin=-1, vmax=1)
+#     axes[0].set_title('ID correlation matrix')
+#     sns.heatmap(np.corrcoef(out_batch.T), ax=axes[1], cmap='coolwarm', center=0, vmin=-1, vmax=1)
+#     axes[1].set_title('OOD correlation matrix')
+#     plt.tight_layout()
+#     plt.savefig("original_OOD_corr.png")
+#
+#
+#
+
+
 # PF, RR, WF
-#  epoch  9 1710/2397 loss 0.87 (ce 0.320997, oe 1.105882)& 0.01 & 99.98 & 99.97
-#
-#  & 0.01 & 99.98 & 99.97
-# [[16759     9]
-#  [ 1315 24981]]
-#  epoch 19 1710/2397 loss 0.68 (ce 0.122992, oe 1.104778)& 0.01 & 99.99 & 100.00
-#
-#  & 0.01 & 99.99 & 100.00
-# [[16767     1]
-#  [ 1315 24981]]
-#  epoch 29 1710/2397 loss 0.72 (ce 0.169651, oe 1.104834)& 0.01 & 99.87 & 99.90
-#
-#  & 0.01 & 99.87 & 99.90
-# [[16744    24]
-#  [ 1315 24981]]
-#  epoch 39 1710/2397 loss 0.64 (ce 0.082893, oe 1.104372)& 0.01 & 99.92 & 99.95
-#
-#  & 0.01 & 99.92 & 99.95
-# [[16752    16]
-#  [ 1314 24982]]
 #  epoch 49 1710/2397 loss 0.60 (ce 0.052553, oe 1.104054)& 0.00 & 99.91 & 99.94
 #
 #  & 0.00 & 99.91 & 99.94
@@ -474,29 +431,25 @@ if __name__ == "__main__":
 #  [ 1312 24984]]
 
 
-#PF, WF, RR
-#  epoch  9 1501/2397 loss 0.93 (ce 0.376968, oe 1.110689)& 2.37 & 99.17 & 98.73
+# without OE
+# epoch 48 2397/2397 loss 0.03 (ce 0.028936)& 35.90 & 92.66 & 87.17
 #
-#  & 2.37 & 99.17 & 98.73
-# [[16513   255]
+#  & 35.90 & 92.66 & 87.17
+# [[12775  3993]
 #  [ 1315 24981]]
-#  epoch 19 1501/2397 loss 0.91 (ce 0.353085, oe 1.109342)& 0.02 & 99.98 & 99.97
+
+
+# no direct worst case search
+#  epoch 48 1710/2397 loss 0.60 (ce 0.047370, oe 1.098666)& 0.01 & 99.92 & 99.87
 #
-#  & 0.02 & 99.98 & 99.97
-# [[16750    18]
+#  & 0.01 & 99.92 & 99.87
+# [[16751    17]
 #  [ 1315 24981]]
-#  epoch 29 1501/2397 loss 0.83 (ce 0.275283, oe 1.113800)& 0.01 & 99.88 & 99.92
+
+# no indirect
+#  (ce 0.047370, oe 1.098666)& 0.01 & 99.92 & 99.87
 #
-#  & 0.01 & 99.88 & 99.92
-# [[16748    20]
+#  & 0.01 & 99.92 & 99.87
+# [[16751    17]
 #  [ 1315 24981]]
-#  epoch 39 1501/2397 loss 0.83 (ce 0.276339, oe 1.114403)& 0.00 & 99.98 & 99.98
-#
-#  & 0.00 & 99.98 & 99.98
-# [[16764     4]
-#  [ 1313 24983]]
-#  epoch 49 1501/2397 loss 0.81 (ce 0.255903, oe 1.110734)& 0.01 & 99.96 & 99.97
-#
-#  & 0.01 & 99.96 & 99.97
-# [[16762     6]
-#  [ 1310 24986]]
+

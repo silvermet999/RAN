@@ -2,9 +2,9 @@ import pandas as pd
 from pathlib import Path
 import re
 
-import prep
+from DAL import prep
 
-root_dir = Path("../rome_static_medium/sched2/tr27")
+root_dir = Path("/home/silver/PycharmProjects/RAN2/rome_static_medium/sched1/tr0")
 
 def slices():
     dfs = []
@@ -50,7 +50,7 @@ def ue():
         elif ue_num in attack_2:
             return 2
         else:
-            pass
+            return 3
 
     for i in range(1, 5 + 1):
         for j in range(1, 7 + 1):
@@ -112,29 +112,22 @@ def concat_csvs():
     ue_csvs = ue()
     bs_csvs = bs()
     df1 = pd.merge_asof(
-        ue_csvs.sort_values('time'),
+        slices_csvs.sort_values('time'),
         bs_csvs.sort_values('time'),
         on='time',
-        suffixes=('_ue', '_bs'),
+        suffixes=('_s', '_bs'),
         direction='nearest'
     )
-    df = pd.merge_asof(
-        df1.sort_values('time'),
-        slices_csvs.sort_values("time"),
-        on="time",
-        suffixes=('_ns', "_s"),
-        direction="nearest"
-    )
-
-    df.to_csv("sched2.csv", index=False)
+    df = pd.concat([df1, ue_csvs], axis=1)
+    df = df.drop(["Unnamed: 4", "Unnamed: 10", "Unnamed: 18", "Unnamed: 28", "Unnamed: 31"], axis=1)
+    df = df.dropna(axis=0)
+    df.to_csv("sched1.csv", index=False)
     return df
 
 df_sched0 = pd.read_csv("/home/silver/PycharmProjects/RAN2/src/sched0.csv", index_col=False)
 df_sched1 = pd.read_csv("/home/silver/PycharmProjects/RAN2/src/sched1.csv", index_col=False)
 #df = pd.concat([df_sched0, df_sched1])
 def data_prep(df):
-    df = df.drop(["Unnamed: 4", "Unnamed: 10", "Unnamed: 18", "Unnamed: 28", "Unnamed: 31"], axis=1)
-    df = df.dropna(axis=0)
     # for col in df.columns:
     #     if len(df[col].unique()) == 1:
     #         df.drop(col, inplace=True, axis=1)

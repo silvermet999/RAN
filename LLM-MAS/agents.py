@@ -33,7 +33,6 @@ llm = ChatOllama(
 # if "ANTHROPIC_API_KEY" not in os.environ:
 #     os.environ["ANTHROPIC_API_KEY"] = getpass.getpass("Enter your Anthropic API key: ")
 #
-#
 # llm_claude = ChatAnthropic(model="claude-haiku-4-5-20251001")
 
 
