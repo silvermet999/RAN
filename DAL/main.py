@@ -187,11 +187,11 @@ for epoch in range(args.epochs):
         metric_ll = []
         metric_ll.append(get_and_print_results(test_loader_out, in_score))
         print('\n & %.2f & %.2f & %.2f' % tuple((100 * torch.Tensor(metric_ll).mean(0)).tolist()))
-        torch.save(net.state_dict(), f"wr{ce_avg}.pt")
+        torch.save(net.state_dict(), f"wr{epoch}.pt")
 
 #DEFAULT: epoch 49 1552/2260 loss 0.97 (ce 0.277142, oe 1.393159)& 72.80 & 75.44 & 93.17
 # all 0:  epoch 49 1552/2260 loss 0.91 (ce 0.215633, oe 1.386615)& 63.04 & 88.37 & 97.64
 # dropped corr:  epoch 49 1582/2260 loss 0.97 (ce 0.272533, oe 1.386962)& 1.67 & 98.45 & 99.72
 # sorting:  epoch 49 1582/2260 loss 1.96 (ce 1.266759, oe 1.386471)& 96.65 & 42.88 & 79.89
-
+# shufflingc
 
