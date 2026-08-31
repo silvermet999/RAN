@@ -126,7 +126,7 @@ def concat_csvs():
 
 df_sched0 = pd.read_csv("/home/silver/PycharmProjects/RAN2/src/sched0.csv", index_col=False)
 df_sched1 = pd.read_csv("/home/silver/PycharmProjects/RAN2/src/sched1.csv", index_col=False)
-#df = pd.concat([df_sched0, df_sched1])
+
 def data_prep(df):
     # for col in df.columns:
     #     if len(df[col].unique()) == 1:
@@ -156,7 +156,8 @@ def data_prep(df):
     df['ta_attach_diverge'] = ((df['is_attached'] == 1) & (df['ul_ta'] == 0.0)).astype(int)
     df['impossible_state'] = ((df['is_attached'] == 0) & (df['ul_ta'] > 0.0)).astype(int)
     df['ul_ta_tier'] = df['ul_ta'].map({0.52: 1, 1.0: 2, 2.1: 3}).fillna(0).astype(int)
-    df = df.drop(["pl", "is_attached", "ul_ta", "pci", "earfcn"], axis=1)
+    df = df.drop(["pci", "earfcn", "pl", "is_attached", "ul_ta", "dl_n_samples", "sum_requested_prbs",
+                  "tx_brate downlink [Mbps]"], axis=1)
     return df
 
 df_sched0_preped = data_prep(df_sched0)

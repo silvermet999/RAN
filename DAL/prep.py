@@ -123,6 +123,13 @@ def concat_csvs():
         suffixes=('_s', '_bs'),
         direction='nearest'
     )
+    # df = pd.merge_asof(
+    #     df1.sort_values('num_ues'),
+    #     bs_csvs.sort_values('nof_ue'),
+    #     on='time',
+    #     suffixes=('_s', '_bs'),
+    #     direction='nearest'
+    # )
     df = pd.concat([df1, ue_csvs], axis=1)
     df = df.drop(["Unnamed: 4", "Unnamed: 10", "Unnamed: 18", "Unnamed: 28", "Unnamed: 31"], axis=1)
     df = df.dropna(axis=0)
@@ -161,7 +168,7 @@ df['ta_attach_diverge'] = ((df['is_attached'] == 1) & (df['ul_ta'] == 0.0)).asty
 df['impossible_state'] = ((df['is_attached'] == 0) & (df['ul_ta'] > 0.0)).astype(int)
 df['ul_ta_tier'] = df['ul_ta'].map({0.52: 1, 1.0: 2, 2.1: 3}).fillna(0).astype(int)
 
-df = df.drop(["pci", "earfcn", "pl", "is_attached", "ul_ta"], axis=1)
+df = df.drop(["pci", "earfcn", "pl", "is_attached", "ul_ta", "dl_n_samples", "sum_requested_prbs", "tx_brate downlink [Mbps]"], axis=1)
 X = df.drop("attack", axis=1)
 y = df["attack"]
 

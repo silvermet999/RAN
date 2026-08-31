@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from utils import utils
 from DAL import prep, prep_OOD
 from utils.display_results import get_measures, print_measures
-from DAL_archi import WideResNet
+from wrn import TemporalWideResNet
 # IF CUDA RELATED PROBLEMS
 # sudo rmmod nvidia_uvm
 # sudo modprobe nvidia_uvm
@@ -29,17 +29,17 @@ parser.add_argument('--test_bs', type=int, default=200)
 parser.add_argument('--momentum', type=float, default=0.9, help='Momentum.')
 parser.add_argument('--decay', '-d', type=float, default=0.0005, help='Weight decay (L2 penalty).')
 # WRN Architecture
-parser.add_argument('--layers', default=58, type=int, help='total number of layers')
+parser.add_argument('--layers', default=55, type=int, help='total number of layers')
 parser.add_argument('--widen-factor', default=10, type=int, help='widen factor')
 parser.add_argument('--droprate', default=0.3, type=float, help='dropout probability')
 # DAL hyper parameters
-parser.add_argument('--gamma', default=0, type=float) # increase: higher prevention of large shifts // tradeoff: too restricted, no robustness
-parser.add_argument('--beta',  default=0, type=float) # higher separation between ID and OOD // forgetting primary target
-parser.add_argument('--rho',   default=0, type=float) # higher size of OOD space // OOD overlap with ID
-parser.add_argument('--strength', default=0, type=float) # pushes OOD torwards worst case boundary // exploding gradients, overshoot the boundary space
-parser.add_argument('--warmup', type=int, default=0) # time to form class clusters and learn representation before OOD // leaves fewer epochs to learn OOD
-parser.add_argument('--iter', default=0, type=int) # time to find worst case point within purturbation // computational runtime
-# Others
+parser.add_argument('--gamma', default=0, type=float)
+parser.add_argument('--beta',  default=0, type=float)
+parser.add_argument('--rho',   default=0, type=float)
+parser.add_argument('--strength', default=0, type=float)
+parser.add_argument('--warmup', type=int, default=0)
+parser.add_argument('--iter', default=0, type=int)
+
 parser.add_argument('--out_as_pos', action='store_true', help='OE define OOD data as positive.')
 parser.add_argument('--seed', type=int, default=1)
 
@@ -54,6 +54,7 @@ cuda = True if torch.cuda.is_available() else False
 print(args.gamma, args.beta, args.rho)
 
 cudnn.benchmark = True  # fire on all cylinders
+
 
 ID_train_dataset = utils.CustomDataset(prep.X_train_sc.to_numpy(), prep.y_train.to_numpy())
 ID_test_dataset = utils.CustomDataset(prep.X_test_sc.to_numpy(), prep.y_test.to_numpy())
@@ -70,35 +71,27 @@ expected_ap = ood_num_examples / (ood_num_examples + len(prep.X_test_sc))
 concat = lambda x: np.concatenate(x, axis=0)
 to_np = lambda x: x.data.cpu().numpy()
 
-
-def get_ood_scores_with_indices(loader):
-    scores = []
-    indices = []
-
+def get_ood_scores(loader, in_dist=False):
+    _score = []
     net.eval()
-
     with torch.no_grad():
         for batch_idx, (data, target) in enumerate(loader):
-            if batch_idx >= ood_num_examples // args.test_bs:
+            if batch_idx >= ood_num_examples // args.test_bs and in_dist is False:
                 break
-            data = data.to(torch.float).cuda()
+            data, target = data.to(torch.float).cuda(), target.cuda()
             output = net(data)
-            smax = F.softmax(output, dim=1)
-            batch_scores = -smax.max(dim=1).values
-            scores.append(batch_scores.cpu().numpy())
-            start = batch_idx * args.test_bs
-            end = start + len(data)
-            indices.extend(range(start, end))
-    return (
-        np.concatenate(scores)[:ood_num_examples],
-        np.array(indices[:ood_num_examples])
-    )
+            smax = to_np(F.softmax(output, dim=1))
+            _score.append(-np.max(smax, axis=1))
+    if in_dist:
+        return concat(_score).copy() # , concat(_right_score).copy(), concat(_wrong_score).copy()
+    else:
+        return concat(_score)[:ood_num_examples].copy()
 
 def get_and_print_results(ood_loader, in_score, num_to_avg=1):
     net.eval()
     aurocs, auprs, fprs = [], [], []
     for _ in range(num_to_avg):
-        out_score, _ = get_ood_scores_with_indices(ood_loader)
+        out_score = get_ood_scores(ood_loader)
         if args.out_as_pos: # OE's defines out samples as positive
             measures = get_measures(out_score, in_score)
         else:
@@ -108,84 +101,18 @@ def get_and_print_results(ood_loader, in_score, num_to_avg=1):
     print_measures(auroc, aupr, fpr, '')
     return fpr, auroc, aupr
 
+def train(epoch, gamma):
 
-def get_confusion_details(ood_loader, in_score, recall_level=0.95):
-
-    net.eval()
-
-    out_score, ood_indices = get_ood_scores_with_indices(ood_loader)
-
-    y_true = np.concatenate([
-        np.ones(len(out_score)),
-        np.zeros(len(in_score))
-    ])
-
-    y_score = np.concatenate([
-        out_score,
-        in_score
-    ])
-
-    desc_score_indices = np.argsort(y_score)[::-1]
-
-    y_score_sorted = y_score[desc_score_indices]
-    y_true_sorted = y_true[desc_score_indices]
-
-    tps = np.cumsum(y_true_sorted)
-    recall = tps / tps[-1]
-
-    cutoff_idx = np.argmin(
-        np.abs(recall - recall_level)
-    )
-
-    threshold = y_score_sorted[cutoff_idx]
-
-    y_pred = (y_score >= threshold).astype(int)
-
-    cm = confusion_matrix(y_true, y_pred)
-
-    ood_pred = y_pred[:len(out_score)]
-    false_negative_mask = ood_pred == 0
-    false_negative_indices = ood_indices[false_negative_mask]
-
-    return (
-        cm,
-        threshold,
-        out_score,
-        false_negative_indices
-    )
-
-
-debug_stats = {}
-
-def make_forward_hook(name):
-    def hook(module, input, output):
-        debug_stats[f'{name}_out_norm'] = output.norm(dim=-1).mean().item()
-        if torch.isnan(output).any() or torch.isinf(output).any():
-            print(f"!!! NaN/Inf in {name} output !!!")
-    return hook
-
-def make_backward_hook(name):
-    def hook(module, grad_input, grad_output):
-        if grad_output[0] is not None:
-            debug_stats[f'{name}_grad_norm'] = grad_output[0].norm().item()
-            if torch.isnan(grad_output[0]).any():
-                print(f"!!! NaN gradient at {name} !!!")
-    return hook
-
-def pre_hook(module, input):
-    print(f"Input to {module.__class__.__name__}: shape={input[0].shape}, "
-          f"range=[{input[0].min().item():.3f}, {input[0].max().item():.3f}]")
-
-
-def train(epoch, gamma, debug_hooks=None):
     net.train()
-    loss_avg = 0.0
     ce_avg, oe_avg, oe_old_avg = 0.0, 0.0, 0.0
 
+    loss_avg = 0.0
+    train_loader_out.dataset.offset = np.random.randint(len(train_loader_in.dataset))
     for batch_idx, (in_set, out_set) in enumerate(zip(train_loader_in, train_loader_out)):
 
         data, target = torch.cat((in_set[0], out_set[0]), 0), in_set[1]
         data, target = data.to(torch.float).cuda(), target.cuda()
+
 
         x, emb = net.pred_emb(data)
         l_ce = F.cross_entropy(x[:len(in_set[0])], target)
@@ -196,62 +123,38 @@ def train(epoch, gamma, debug_hooks=None):
 
         for _ in range(args.iter):
             emb_bias.requires_grad_()
-            x_aug = net.fc_out(emb_bias + emb_oe)
+
+            x_aug = net.fc(emb_bias + emb_oe)
             l_sur = - (x_aug.mean(1) - torch.logsumexp(x_aug, dim=1)).mean()
             r_sur = (emb_bias.abs()).mean(-1).mean()
             l_sur = l_sur - r_sur * gamma
             grads = torch.autograd.grad(l_sur, [emb_bias])[0]
             grads /= (grads ** 2).sum(-1).sqrt().unsqueeze(1)
+            
             emb_bias = emb_bias.detach() + args.strength * grads.detach()
             optimizer.zero_grad()
-
+        
         # gamma -= args.beta * (args.rho - r_sur.detach())
         # gamma = gamma.clamp(min=0.0, max=args.gamma)
         if epoch >= args.warmup:
-            x_oe = net.fc_out(emb[len(in_set[0]):] + emb_bias)
-        else:
-            x_oe = net.fc_out(emb[len(in_set[0]):])
-
+            x_oe = net.fc(emb[len(in_set[0]):] + emb_bias)
+        else:    
+            x_oe = net.fc(emb[len(in_set[0]):])
+        
         l_oe = - (x_oe.mean(1) - torch.logsumexp(x_oe, dim=1)).mean()
-        # print(x_oe.softmax(1).max(1)[0].mean())
         loss = l_ce + .5 * l_oe
-
-
-        # ---- DEBUG BLOCK ----
-        # if batch_idx % 20 == 0:
-        #     print(f"\n[batch {batch_idx}] l_ce={l_ce.item():.4f}  l_oe={l_oe.item():.4f}  "
-        #           f"l_oe_old={l_oe_old.item():.4f}  gamma={gamma.item():.4f}  r_sur={r_sur.item():.6f}")
-        #     print(f"  x[:ID] logit range: [{x[:len(in_set[0])].min().item():.2f}, {x[:len(in_set[0])].max().item():.2f}]")
-        #     print(f"  x[OOD] logit range: [{x[len(in_set[0]):].min().item():.2f}, {x[len(in_set[0]):].max().item():.2f}]")
-        #     print(f"  emb norm: {emb.norm(dim=-1).mean().item():.4f}  emb_bias norm: {emb_bias.norm(dim=-1).mean().item():.4f}")
-        #     if torch.isnan(loss) or torch.isinf(loss):
-        #         print("  !!! NaN/Inf detected in loss !!!")
-        # ---- END DEBUG ----
-
+    
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        # if batch_idx % 20 == 0 and debug_hooks:
-        #     print(debug_stats)
-
         loss_avg = loss_avg * 0.8 + float(loss) * 0.2
         ce_avg = ce_avg * 0.8 + float(l_ce) * 0.2
         oe_avg = oe_avg * 0.8 + float(l_oe) * 0.2
 
         sys.stdout.write('\r epoch %2d %d/%d loss %.2f (ce %f, oe %f)' %
-                          (epoch, batch_idx + 1, len(train_loader_in), loss_avg, ce_avg, oe_avg))
-        # print("confidence:", x_oe.softmax(1).max(1).values.mean().item())
-        # print("probs:", x_oe.softmax(1).mean(0))
-        # print(f"emb norm: {emb.norm(dim=-1).mean().item():.4f}")
-        # relative = emb_bias.norm(dim=1) / emb_oe.norm(dim=1)
-        # print(relative.mean().item())
-        # print(f"r_sur: {r_sur.item():.6f}") #  bias: {emb_bias.norm(dim=1).mean().item():.4f}")
-        # print(f"gamma: {gamma.item():.6f}")
-        # print(f"l_oe={l_oe.item():.4f}  floor={math.log(3):.4f}  diff={l_oe.item() - math.log(3):.4f}")
+                         (epoch, batch_idx + 1, len(train_loader_in), loss_avg, ce_avg, oe_avg))
         scheduler.step()
-
-    return gamma, loss_avg, ce_avg, oe_avg
-
+    return gamma
 
 def test():
     net.eval()
@@ -259,197 +162,36 @@ def test():
     y, c = [], []
     with torch.no_grad():
         for data, target in test_loader_in:
-            data, target = data.cuda(), target.cuda()
+            data, target = data.to(torch.float).cuda(), target.cuda()
             output = net(data)
             pred = output.data.max(1)[1]
             correct += pred.eq(target.data).sum().item()
     return correct / len(test_loader_in.dataset) * 100
 
 
-num_classes = 3
-net = WideResNet(args.layers, num_classes, args.widen_factor, dropRate=args.droprate).cuda()
 
-# handles = []
-# for h in handles:
-#     h.remove()
-# handles.append(net.block1.register_forward_hook(make_forward_hook('block1')))
-# handles.append(net.block2.register_forward_hook(make_forward_hook('block2')))
-# handles.append(net.block3.register_forward_hook(make_forward_hook('block3')))
-# handles.append(net.block1.register_forward_pre_hook(pre_hook))
-# handles.append(net.block2.register_forward_pre_hook(pre_hook))
-# handles.append(net.block3.register_forward_pre_hook(pre_hook))
-# handles.append(net.block1.register_full_backward_hook(make_backward_hook('block1')))
-# handles.append(net.block2.register_full_backward_hook(make_backward_hook('block2')))
-# handles.append(net.block3.register_full_backward_hook(make_backward_hook('block3')))
-
-
+net = TemporalWideResNet(depth=16, num_classes=4, num_feats=55, slice_len=32, widen_factor=2).cuda()
 
 optimizer = torch.optim.SGD(net.parameters(), args.learning_rate, momentum=args.momentum, weight_decay=args.decay, nesterov=True)
 def cosine_annealing(step, total_steps, lr_max, lr_min):
     return lr_min + (lr_max - lr_min) * 0.5 * (1 + np.cos(step / total_steps * np.pi))
 scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda step: cosine_annealing(step, args.epochs * len(train_loader_in), 1, 1e-6 / args.learning_rate))
 
+gamma = 0.01
+for epoch in range(args.epochs):
+    gamma = train(epoch, gamma)
+   
+    if epoch % 10 == 9: 
+        net.eval()
+        in_score = get_ood_scores(test_loader_in, in_dist=True)
+        metric_ll = []
+        metric_ll.append(get_and_print_results(test_loader_out, in_score))
+        print('\n & %.2f & %.2f & %.2f' % tuple((100 * torch.Tensor(metric_ll).mean(0)).tolist()))
+        torch.save(net.state_dict(), f"wr{ce_avg}.pt")
 
-def test():
-    net.load_state_dict(torch.load("/home/silver/PycharmProjects/RAN2/models/wr0.08049166758849163.pt"))
-    net.eval()
-    correct = 0
-    y_true, y_pred = [], []
-    with torch.no_grad():
-        for data, target in test_loader_in:
-            data, target = data.to(torch.float).cuda(), target.cuda()
-            output = net(data)
-            pred = output.data.max(1)[1]
-            correct += pred.eq(target.data).sum().item()
-            y_true.extend(target.cpu().numpy())
-            y_pred.extend(pred.cpu().numpy())
+#DEFAULT: epoch 49 1552/2260 loss 0.97 (ce 0.277142, oe 1.393159)& 72.80 & 75.44 & 93.17
+# all 0:  epoch 49 1552/2260 loss 0.91 (ce 0.215633, oe 1.386615)& 63.04 & 88.37 & 97.64
+# dropped corr:  epoch 49 1582/2260 loss 0.97 (ce 0.272533, oe 1.386962)& 1.67 & 98.45 & 99.72
+# sorting:  epoch 49 1582/2260 loss 1.96 (ce 1.266759, oe 1.386471)& 96.65 & 42.88 & 79.89
 
-    accuracy = correct / len(test_loader_in.dataset) * 100
-    precision = precision_score(y_true, y_pred, average='macro', zero_division=0)
-    recall = recall_score(y_true, y_pred, average='macro', zero_division=0)
-
-    return accuracy, precision, recall
-# print(test())
-
-if __name__ == "__main__":
-    # process = subprocess.Popen(["mlflow", "server", "--host", "127.0.0.1", "--port", "8080"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    # mlflow.set_tracking_uri(uri="http://127.0.0.1:8080")
-
-        gamma = 0.01
-
-    # mlflow.set_experiment("OOD")
-    # mlflow.pytorch.autolog()
-    #
-    # with mlflow.start_run():
-    #     mlflow.log_params({"epcohs": args.epochs, "learning_rate": args.learning_rate, "batch_size": args.batch_size,
-    #                        "oe_batch": args.oe_batch_size})
-
-        for epoch in range(args.epochs):
-            gamma, loss_avg, ce_avg, oe_avg = train(epoch, gamma)
-
-            if epoch % 10 == 9:
-                net.eval()
-                in_score, _ = get_ood_scores_with_indices(test_loader_in)
-                metric_ll = []
-                metric_ll.append(get_and_print_results(test_loader_out, in_score))
-                cm, threshold, out_score, fn_indices = get_confusion_details(
-                    test_loader_out,
-                    in_score
-                )
-                print('\n & %.2f & %.2f & %.2f' % tuple((100 * torch.Tensor(metric_ll).mean(0)).tolist()))
-                print(cm)
-
-                torch.save(net.state_dict(), f"wr{ce_avg}.pt")
-
-                # records = []
-                # worst_indices, worst_scores, worst_labels = utils.get_worst_attacks(
-                #     out_score, fn_indices, test_loader_out.dataset, n=100)
-                #
-                # for idx, label, score in zip(worst_indices, worst_labels, worst_scores):
-                #     records.append({
-                #         'index': int(idx),
-                #         'label': int(label),
-                #         'ood_score': abs(float(score)),
-                #         **{
-                #             f'{i}': v
-                #             for i, v in enumerate(test_loader_out.dataset[idx][0])
-                #         }
-                #     })
-                #
-                # df = pd.DataFrame(records)
-                # df.columns = list(df.columns[:3]) + list(prep.X_train_sc.columns)
-                # df.to_csv(f"high_conf_attacks_2.csv", index=False)
-
-            #     mlflow.log_metric("in_score", in_score, step=epoch)
-            #
-
-    #         mlflow.log_metrics({"gamma": gamma, "loss_avg": loss_avg, "ce_avg": ce_avg, 'oe_avg': oe_avg}, step=epoch)
-    # #
-    # mlflow.pytorch.log_model(net, name="model", serialization_format="pickle")
-
-
-
-
-# def plots():
-#     in_batch, _ = next(iter(train_loader_in))
-#     out_batch, _ = next(iter(train_loader_out))
-#
-#     in_batch = in_batch.numpy()
-#     out_batch = out_batch.numpy()
-#
-#     print("ID shape:", in_batch.shape, " OOD shape:", out_batch.shape)
-#
-#     X = np.vstack([in_batch, out_batch])
-#     y = np.concatenate([np.zeros(len(in_batch)), np.ones(len(out_batch))])
-#
-#     clf = RandomForestClassifier(n_estimators=200, max_depth=6)
-#     scores = cross_val_score(clf, X, y, cv=3, scoring='roc_auc')
-#     print(f"ID vs OOD separability (AUROC): {scores.mean():.3f}")
-#     combined = np.vstack([in_batch, out_batch])
-#     pca = PCA(n_components=2)
-#     proj = pca.fit_transform(combined)
-#
-#     n_in = len(in_batch)
-#     plt.figure(figsize=(6, 6))
-#     plt.scatter(proj[:n_in, 0], proj[:n_in, 1], alpha=0.5, label='ID (train_loader_in)', s=10)
-#     plt.scatter(proj[n_in:, 0], proj[n_in:, 1], alpha=0.5, label='OOD (train_loader_out)', s=10)
-#     plt.legend()
-#     plt.title('PCA projection: ID vs OOD')
-#     plt.xlabel('PC1')
-#     plt.ylabel('PC2')
-#     plt.savefig("orginal_OOD.png")
-#     num_features_to_plot = min(6, in_batch.shape[1])
-#     fig, axes = plt.subplots(2, 3, figsize=(15, 8))
-#     axes = axes.flatten()
-#
-#     for i in range(num_features_to_plot):
-#         axes[i].hist(in_batch[:, i], bins=30, alpha=0.5, label='ID', density=True)
-#         axes[i].hist(out_batch[:, i], bins=30, alpha=0.5, label='OOD', density=True)
-#         axes[i].set_title(f'Feature {i}')
-#         axes[i].legend()
-#
-#     plt.tight_layout()
-#     plt.savefig("original_OOD_hist.png")
-#
-#     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-#     sns.heatmap(np.corrcoef(in_batch.T), ax=axes[0], cmap='coolwarm', center=0, vmin=-1, vmax=1)
-#     axes[0].set_title('ID correlation matrix')
-#     sns.heatmap(np.corrcoef(out_batch.T), ax=axes[1], cmap='coolwarm', center=0, vmin=-1, vmax=1)
-#     axes[1].set_title('OOD correlation matrix')
-#     plt.tight_layout()
-#     plt.savefig("original_OOD_corr.png")
-#
-#
-#
-
-
-# PF, RR, WF
-#  epoch 49 1710/2397 loss 0.60 (ce 0.052553, oe 1.104054)& 0.00 & 99.91 & 99.94
-#
-#  & 0.00 & 99.91 & 99.94
-# [[16752    16]
-#  [ 1312 24984]]
-
-
-# without OE
-# epoch 48 2397/2397 loss 0.03 (ce 0.028936)& 35.90 & 92.66 & 87.17
-#
-#  & 35.90 & 92.66 & 87.17
-# [[12775  3993]
-#  [ 1315 24981]]
-
-
-# no direct worst case search
-#  epoch 48 1710/2397 loss 0.60 (ce 0.047370, oe 1.098666)& 0.01 & 99.92 & 99.87
-#
-#  & 0.01 & 99.92 & 99.87
-# [[16751    17]
-#  [ 1315 24981]]
-
-# no indirect
-#  (ce 0.047370, oe 1.098666)& 0.01 & 99.92 & 99.87
-#
-#  & 0.01 & 99.92 & 99.87
-# [[16751    17]
-#  [ 1315 24981]]
 
